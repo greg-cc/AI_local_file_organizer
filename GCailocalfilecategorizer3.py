@@ -18,7 +18,6 @@ else:
     print("GPU not found. Device set to use CPU.")
 
 # --- Configuration ---
-NUM_CHUNKS_TO_SUMMARIZE = 3
 MAX_CHUNK_LENGTH = 512
 MAX_SUMMARY_LENGTH = 300
 MIN_SUMMARY_LENGTH = 80
@@ -133,7 +132,7 @@ except Exception as e:
 
 
 # --- File Reading Functions ---
-def read_pdf(file_path):
+def read_pdf(file_path, num_chunks):
     """Extracts text from a PDF file using PyMuPDF, stopping after a specified number of chunks."""
     text = ""
     word_count = 0
@@ -142,8 +141,8 @@ def read_pdf(file_path):
             for page in pdf:
                 page_text = page.get_text()
                 words = page_text.split()
-                if word_count + len(words) >= NUM_CHUNKS_TO_SUMMARIZE * MAX_CHUNK_LENGTH:
-                    remaining_words = (NUM_CHUNKS_TO_SUMMARIZE * MAX_CHUNK_LENGTH) - word_count
+                if word_count + len(words) >= num_chunks * MAX_CHUNK_LENGTH:
+                    remaining_words = (num_chunks * MAX_CHUNK_LENGTH) - word_count
                     text += " ".join(words[:remaining_words])
                     break
                 else:
@@ -154,7 +153,7 @@ def read_pdf(file_path):
         text = ""
     return text
 
-def read_docx(file_path):
+def read_docx(file_path, num_chunks):
     """Extracts text from a DOCX file, stopping after a specified number of chunks."""
     text = ""
     word_count = 0
@@ -162,8 +161,8 @@ def read_docx(file_path):
         doc = Document(file_path)
         for para in doc.paragraphs:
             words = para.text.split()
-            if word_count + len(words) >= NUM_CHUNKS_TO_SUMMARIZE * MAX_CHUNK_LENGTH:
-                remaining_words = (NUM_CHUNKS_TO_SUMMARIZE * MAX_CHUNK_LENGTH) - word_count
+            if word_count + len(words) >= num_chunks * MAX_CHUNK_LENGTH:
+                remaining_words = (num_chunks * MAX_CHUNK_LENGTH) - word_count
                 text += " ".join(words[:remaining_words])
                 break
             else:
@@ -174,19 +173,19 @@ def read_docx(file_path):
         text = ""
     return text
 
-def read_txt(file_path):
+def read_txt(file_path, num_chunks):
     """Reads text from a plain TXT file, stopping after a specified number of chunks."""
     text = ""
     try:
         with open(file_path, "r", encoding="utf-8") as file:
             words = file.read().split()
-            text = " ".join(words[:NUM_CHUNKS_TO_SUMMARIZE * MAX_CHUNK_LENGTH])
+            text = " ".join(words[:num_chunks * MAX_CHUNK_LENGTH])
     except Exception as e:
         print(f"Error reading TXT: {e}")
         text = ""
     return text
 
-def read_excel(file_path):
+def read_excel(file_path, num_chunks):
     """Extracts text from an XLSX (Excel) file, stopping after a specified number of chunks."""
     text = ""
     try:
@@ -194,15 +193,15 @@ def read_excel(file_path):
         for sheet in sheets:
             df = pd.read_excel(file_path, sheet_name=sheet)
             words = df.to_string(index=False).split()
-            text = " ".join(words[:NUM_CHUNKS_TO_SUMMARIZE * MAX_CHUNK_LENGTH])
-            if len(words) >= NUM_CHUNKS_TO_SUMMARIZE * MAX_CHUNK_LENGTH:
+            text = " ".join(words[:num_chunks * MAX_CHUNK_LENGTH])
+            if len(words) >= num_chunks * MAX_CHUNK_LENGTH:
                 break
     except Exception as e:
         print(f"Error reading XLSX: {e}")
         text = ""
     return text
 
-def read_pptx(file_path):
+def read_pptx(file_path, num_chunks):
     """Extracts text from a PPTX (PowerPoint) file, stopping after a specified number of chunks."""
     text = ""
     word_count = 0
@@ -212,14 +211,14 @@ def read_pptx(file_path):
             for shape in slide.shapes:
                 if shape.has_text_frame:
                     words = shape.text.split()
-                    if word_count + len(words) >= NUM_CHUNKS_TO_SUMMARIZE * MAX_CHUNK_LENGTH:
-                        remaining_words = (NUM_CHUNKS_TO_SUMMARIZE * MAX_CHUNK_LENGTH) - word_count
+                    if word_count + len(words) >= num_chunks * MAX_CHUNK_LENGTH:
+                        remaining_words = (num_chunks * MAX_CHUNK_LENGTH) - word_count
                         text += " ".join(words[:remaining_words])
                         break
                     else:
                         text += shape.text + "\n"
                         word_count += len(words)
-            if word_count >= NUM_CHUNKS_TO_SUMMARIZE * MAX_CHUNK_LENGTH:
+            if word_count >= num_chunks * MAX_CHUNK_LENGTH:
                 break
     except Exception as e:
         print(f"Error reading PPTX: {e}")
@@ -227,9 +226,9 @@ def read_pptx(file_path):
     return text
 
 # --- Summarization Function ---
-def summarize_text(text):
+def summarize_text(text, num_chunks):
     """
-    Generates a summary from the first three chunks of text.
+    Generates a summary from a specified number of chunks of text.
     """
     if not text.strip():
         return ["No text to summarize."]
@@ -239,8 +238,8 @@ def summarize_text(text):
     
     summaries = []
     
-    # Process only the first three chunks
-    for i in range(min(NUM_CHUNKS_TO_SUMMARIZE, len(chunks))):
+    # Process only the specified number of chunks
+    for i in range(min(num_chunks, len(chunks))):
         print(f"Step 6.1.1: Summarizing chunk {i + 1} of {len(chunks)}...")
         try:
             summary = summarizer(
@@ -275,7 +274,7 @@ def categorize_summary(summary_text, categories):
         return "Other"
 
 # --- Main Processing Logic ---
-def process_files_in_folder(folder_path, scan_subdirectories, categories):
+def process_files_in_folder(folder_path, scan_subdirectories, categories, num_chunks, file_management_settings):
     """
     Walks a folder, processes supported files, and generates summaries.
     Includes detailed progress checks.
@@ -315,12 +314,12 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories):
         print(f"\nStep 5: Processing file {i + 1}/{len(file_list)} - {os.path.basename(file_path)}")
         reader = supported_extensions[os.path.splitext(file_path)[1].lower()]
 
-        print(f"Step 6: Extracting first {NUM_CHUNKS_TO_SUMMARIZE} chunks of text...")
-        text = reader(file_path)
+        print(f"Step 6: Extracting first {num_chunks} chunks of text...")
+        text = reader(file_path, num_chunks)
 
         if text.strip():
             print("Step 7: First chunks extracted successfully. Starting summarization...")
-            bullet_points = summarize_text(text)
+            bullet_points = summarize_text(text, num_chunks)
             
             # Categorize the summary
             summary_text = " ".join(bullet_points)
@@ -346,6 +345,38 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories):
                 summary_file.write(f"Category: {category}\n\n")
                 summary_file.write(summary_text_for_file)
                 print(f"Summary saved to: {summary_file_path}")
+                
+            # Perform file management immediately after saving
+            if category in file_management_settings and category != "Other":
+                settings = file_management_settings[category]
+                prefix = settings['prefix']
+                destination_folder = settings['destination']
+                
+                os.makedirs(destination_folder, exist_ok=True)
+
+                original_file_extension = os.path.splitext(file_path)[1]
+                original_file_name_no_ext = os.path.basename(os.path.splitext(file_path)[0])
+                
+                new_pdf_name = f"{prefix}_{original_file_name_no_ext}{original_file_extension}"
+                new_summary_name = f"{prefix}_{original_file_name_no_ext}_summary.txt"
+
+                destination_pdf_path = os.path.join(destination_folder, new_pdf_name)
+                summary_destination_path = os.path.join(destination_folder, new_summary_name)
+                
+                if os.path.exists(file_path):
+                    try:
+                        shutil.move(file_path, destination_pdf_path)
+                        print(f"Moved and renamed: {file_path} -> {destination_pdf_path}")
+                    except Exception as move_e:
+                        print(f"Error moving original file: {move_e}")
+                
+                if os.path.exists(summary_file_path):
+                    try:
+                        shutil.move(summary_file_path, summary_destination_path)
+                        print(f"Moved and renamed: {summary_file_path} -> {summary_destination_path}")
+                    except Exception as move_e:
+                        print(f"Error moving summary file: {move_e}")
+
         else:
             print("Step 8.1: Skipping file - unable to extract meaningful text.")
     
@@ -367,62 +398,42 @@ if __name__ == "__main__":
         scan_sub_input = input("Scan subdirectories? (yes/no): ").strip().lower()
         scan_subdirectories = scan_sub_input == 'yes'
 
+        while True:
+            num_chunks_input = input("Enter the number of chunks to summarize per file: ").strip()
+            try:
+                num_chunks_to_use = int(num_chunks_input)
+                if num_chunks_to_use > 0:
+                    break
+                else:
+                    print("Please enter a number greater than 0.")
+            except ValueError:
+                print("Invalid input. Please enter a valid number.")
+
+        # New logic to set up file management rules before processing
+        file_management_settings = {}
+        print("\n--- Define File Management Rules ---")
+        for category in CATEGORIES:
+            if category != "Other":
+                choice = input(f"Do you want to manage files for '{category}'? (yes/no): ").strip().lower()
+                if choice == 'yes':
+                    prefix = ""
+                    while True:
+                        prefix = input(f"Enter an 8-character prefix for '{category}': ").strip()
+                        if len(prefix) <= 8:
+                            break
+                        else:
+                            print("Prefix must be 8 characters or less. Please try again.")
+                    
+                    dest_folder_name = input(f"Enter the destination folder name for '{category}' (leave blank for '{category}'): ").strip()
+                    if not dest_folder_name:
+                        dest_folder_name = category # Use category name as default
+                    
+                    file_management_settings[category] = {
+                        'prefix': prefix,
+                        'destination': os.path.join(folder_path, dest_folder_name)
+                    }
         print("\nStep 10: Folder path is valid. Starting the batch process...")
-        process_files_in_folder(folder_path, scan_subdirectories, CATEGORIES)
-
-        # Prompt for file management after processing is complete
-        print("\n--- File Management ---")
-        category_to_move = input("Enter the category you want to move to its own folder (e.g., 'Health'): ").strip()
-        
-        # Check if the user wants to move a valid category
-        if category_to_move in CATEGORIES and category_to_move != "Other":
-            
-            # Ask for a prefix for renaming
-            prefix = input(f"Enter a prefix (max 8 characters) for renaming files in the '{category_to_move}' category: ").strip()
-            while len(prefix) > 8:
-                print("Prefix is too long. Please enter a prefix with a maximum of 8 characters.")
-                prefix = input("Enter a new prefix: ").strip()
-
-            # Create the destination folder
-            destination_folder = os.path.join(folder_path, category_to_move)
-            os.makedirs(destination_folder, exist_ok=True)
-            print(f"\nMoving and renaming files for category '{category_to_move}' to '{destination_folder}'...")
-
-            # Iterate through files and move/rename them
-            for root, _, files in os.walk(folder_path):
-                for file in files:
-                    if file.lower().endswith('_summary.txt'):
-                        file_path = os.path.join(root, file)
-                        try:
-                            with open(file_path, 'r', encoding='utf-8') as f:
-                                content = f.read()
-                                if f"Category: {category_to_move}" in content:
-                                    # Get the original file path and name
-                                    original_base_name = os.path.splitext(file)[0][:-8]
-                                    original_pdf_path = os.path.join(root, original_base_name + '.pdf')
-                                    
-                                    # Create the new file names
-                                    new_pdf_name = f"{prefix}_{os.path.basename(original_pdf_path)}"
-                                    new_summary_name = f"{prefix}_{os.path.basename(file)}"
-                                    
-                                    destination_pdf_path = os.path.join(destination_folder, new_pdf_name)
-                                    summary_destination_path = os.path.join(destination_folder, new_summary_name)
-                                    
-                                    # Move the original PDF
-                                    if os.path.exists(original_pdf_path):
-                                        shutil.move(original_pdf_path, destination_pdf_path)
-                                        print(f"Moved and renamed: {original_pdf_path} -> {destination_pdf_path}")
-                                        
-                                    # Also move the summary file
-                                    shutil.move(file_path, summary_destination_path)
-                                    print(f"Moved and renamed: {file_path} -> {summary_destination_path}")
-                                        
-                        except Exception as e:
-                            print(f"Error processing {file}: {e}")
-
-            print("\nFile management complete.")
-        else:
-            print("No valid category selected for file management.")
+        process_files_in_folder(folder_path, scan_subdirectories, CATEGORIES, num_chunks_to_use, file_management_settings)
             
     except KeyboardInterrupt:
         print("\nProcess interrupted by user. Exiting gracefully.")
