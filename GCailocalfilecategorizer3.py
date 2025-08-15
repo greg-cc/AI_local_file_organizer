@@ -354,40 +354,26 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, num_ch
             })
 
             # Perform file management immediately after saving
-            if category in file_management_settings and category != "Other":
+            if category in file_management_settings and file_management_settings[category].get('destination'):
                 settings = file_management_settings[category]
                 prefix = settings['prefix']
                 destination_folder = settings['destination']
                 
                 os.makedirs(destination_folder, exist_ok=True)
 
-                # Get the original file path and name
                 original_file_extension = os.path.splitext(file_path)[1]
                 original_file_name_no_ext = os.path.basename(os.path.splitext(file_path)[0])
                 
-                # Check if the summary file exists before trying to move it
-                if os.path.exists(summary_file_path):
-                    
-                    new_pdf_name = f"{prefix}_{original_file_name_no_ext}{original_file_extension}"
-                    new_summary_name = f"{prefix}_{original_file_name_no_ext}_summary.txt"
-
-                    destination_pdf_path = os.path.join(destination_folder, new_pdf_name)
-                    summary_destination_path = os.path.join(destination_folder, new_summary_name)
-                    
-                    # Move the original PDF
-                    if os.path.exists(file_path):
-                        try:
-                            shutil.move(file_path, destination_pdf_path)
-                            print(f"Moved and renamed: {file_path} -> {destination_pdf_path}")
-                        except Exception as move_e:
-                            print(f"Error moving original file: {move_e}")
-                    
-                    # Also move the summary file
+                new_file_name = f"{prefix}_{original_file_name_no_ext}{original_file_extension}"
+                destination_pdf_path = os.path.join(destination_folder, new_file_name)
+                
+                if os.path.exists(file_path):
                     try:
-                        shutil.move(summary_file_path, summary_destination_path)
-                        print(f"Moved and renamed: {summary_file_path} -> {summary_destination_path}")
+                        shutil.move(file_path, destination_pdf_path)
+                        print(f"Moved and renamed: {file_path} -> {destination_pdf_path}")
                     except Exception as move_e:
-                        print(f"Error moving summary file: {move_e}")
+                        print(f"Error moving original file: {move_e}")
+                
         else:
             print("Step 8.1: Skipping file - unable to extract meaningful text.")
     
