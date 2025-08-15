@@ -310,9 +310,11 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, num_ch
 
     if not file_list:
         print("Step 3: No supported files found. Exiting.")
-        return
+        return []
 
     print(f"Step 4: Found {len(file_list)} supported files. Processing them now...")
+
+    all_summaries = []
 
     # Main loop to process files one-by-one and display summaries immediately
     for i, file_path in enumerate(file_list):
@@ -344,13 +346,13 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, num_ch
                 summary_text_for_file += f"- {point.strip()}\n"
             print("\n" + "-"*50)
 
-            # Save to text file
-            with open(summary_file_path, "w", encoding="utf-8") as summary_file:
-                summary_file.write(f"Summary for: {file_path}\n\n")
-                summary_file.write(f"Category: {category}\n\n")
-                summary_file.write(summary_text_for_file)
-                print(f"Summary saved to: {summary_file_path}")
-                
+            # Store the summary information for the final consolidated file
+            all_summaries.append({
+                'file_path': os.path.abspath(file_path),
+                'category': category,
+                'summary': summary_text_for_file
+            })
+
             # Perform file management immediately after saving
             if category in file_management_settings and category != "Other":
                 settings = file_management_settings[category]
@@ -359,33 +361,38 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, num_ch
                 
                 os.makedirs(destination_folder, exist_ok=True)
 
+                # Get the original file path and name
                 original_file_extension = os.path.splitext(file_path)[1]
                 original_file_name_no_ext = os.path.basename(os.path.splitext(file_path)[0])
                 
-                new_pdf_name = f"{prefix}_{original_file_name_no_ext}{original_file_extension}"
-                new_summary_name = f"{prefix}_{original_file_name_no_ext}_summary.txt"
-
-                destination_pdf_path = os.path.join(destination_folder, new_pdf_name)
-                summary_destination_path = os.path.join(destination_folder, new_summary_name)
-                
-                if os.path.exists(file_path):
-                    try:
-                        shutil.move(file_path, destination_pdf_path)
-                        print(f"Moved and renamed: {file_path} -> {destination_pdf_path}")
-                    except Exception as move_e:
-                        print(f"Error moving original file: {move_e}")
-                
+                # Check if the summary file exists before trying to move it
                 if os.path.exists(summary_file_path):
+                    
+                    new_pdf_name = f"{prefix}_{original_file_name_no_ext}{original_file_extension}"
+                    new_summary_name = f"{prefix}_{original_file_name_no_ext}_summary.txt"
+
+                    destination_pdf_path = os.path.join(destination_folder, new_pdf_name)
+                    summary_destination_path = os.path.join(destination_folder, new_summary_name)
+                    
+                    # Move the original PDF
+                    if os.path.exists(file_path):
+                        try:
+                            shutil.move(file_path, destination_pdf_path)
+                            print(f"Moved and renamed: {file_path} -> {destination_pdf_path}")
+                        except Exception as move_e:
+                            print(f"Error moving original file: {move_e}")
+                    
+                    # Also move the summary file
                     try:
                         shutil.move(summary_file_path, summary_destination_path)
                         print(f"Moved and renamed: {summary_file_path} -> {summary_destination_path}")
                     except Exception as move_e:
                         print(f"Error moving summary file: {move_e}")
-
         else:
             print("Step 8.1: Skipping file - unable to extract meaningful text.")
     
     print("\n--- Step 9: All supported files processed ---")
+    return all_summaries
 
 
 # --- Main Execution ---
@@ -429,16 +436,30 @@ if __name__ == "__main__":
                         else:
                             print("Prefix must be 8 characters or less. Please try again.")
                     
-                    dest_folder_name = input(f"Enter the destination folder name for '{category}' (leave blank for '{category}'): ").strip()
-                    if not dest_folder_name:
-                        dest_folder_name = category # Use category name as default
-                    
-                    file_management_settings[category] = {
-                        'prefix': prefix,
-                        'destination': os.path.join(folder_path, dest_folder_name)
-                    }
+                    dest_folder_name = input(f"Enter the destination folder name for '{category}' (leave blank to leave inplace and not move it'): ").strip()
+                    if dest_folder_name:
+                        file_management_settings[category] = {
+                            'prefix': prefix,
+                            'destination': os.path.join(folder_path, dest_folder_name)
+                        }
+                    else:
+                        print(f"Files for '{category}' will not be moved.")
         print("\nStep 10: Folder path is valid. Starting the batch process...")
-        process_files_in_folder(folder_path, scan_subdirectories, CATEGORIES, num_chunks_to_use, file_management_settings)
+        
+        # Call the main processing function and collect all summaries
+        all_summaries = process_files_in_folder(folder_path, scan_subdirectories, CATEGORIES, num_chunks_to_use, file_management_settings)
+
+        # Write all summaries to a single file at the end
+        if all_summaries:
+            print("\n--- Saving all summaries to a single file ---")
+            consolidated_summary_file = os.path.join(folder_path, "all_summaries.txt")
+            with open(consolidated_summary_file, "w", encoding="utf-8") as f:
+                for summary_data in all_summaries:
+                    f.write("="*50 + "\n")
+                    f.write(f"File: {summary_data['file_path']}\n")
+                    f.write(f"Category: {summary_data['category']}\n\n")
+                    f.write(f"Summary:\n{summary_data['summary']}\n")
+            print(f"All summaries consolidated into: {consolidated_summary_file}")
             
     except KeyboardInterrupt:
         print("\nProcess interrupted by user. Exiting gracefully.")
