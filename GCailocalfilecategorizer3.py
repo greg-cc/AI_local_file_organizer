@@ -7,6 +7,7 @@ from transformers import pipeline
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import shutil
+import json
 
 # Check for GPU availability and set the device
 if torch.cuda.is_available():
@@ -32,6 +33,78 @@ CATEGORIES = [
     "Other"
 ]
 
+# --- Load and Edit Categories Function ---
+def load_and_edit_categories():
+    """
+    Loads categories from a file, prompts the user to edit them, and saves the final list.
+    """
+    category_file = "categories.json"
+    default_categories = [
+        "Health",
+        "History",
+        "Zionism, Jews, and Israel",
+        "Surf, Weather, Metrological",
+        "Hyperspectral imaging including anything from JPL or mentioning spectral terms",
+        "Other"
+    ]
+    categories = default_categories
+    
+    try:
+        if os.path.exists(category_file):
+            with open(category_file, 'r', encoding='utf-8') as f:
+                categories = json.load(f)
+            print("Step 1.2: Loaded categories from previous session.")
+    except Exception as e:
+        print(f"Error loading categories file: {e}. Using default categories.")
+
+    print("\n--- Current Categories ---")
+    for i, cat in enumerate(categories):
+        print(f"[{i+1}] {cat}")
+    print("--------------------------")
+    
+    edit_choice = input("Do you want to edit these categories? (yes/no): ").strip().lower()
+    if edit_choice == 'yes':
+        print("\nEditing categories. Enter 'add <new_category>', 'remove <number>', 'edit <number> <new_category>', or 'done' to finish.")
+        while True:
+            command = input("> ").strip().lower()
+            if command == 'done':
+                break
+            
+            parts = command.split()
+            if not parts:
+                continue
+
+            action = parts[0]
+            if action == 'add' and len(parts) >= 2:
+                new_cat = " ".join(parts[1:])
+                categories.append(new_cat)
+                print(f"Added: {new_cat}")
+            elif action == 'remove' and len(parts) == 2 and parts[1].isdigit():
+                idx = int(parts[1]) - 1
+                if 0 <= idx < len(categories):
+                    removed_cat = categories.pop(idx)
+                    print(f"Removed: {removed_cat}")
+                else:
+                    print("Invalid category number.")
+            elif action == 'edit' and len(parts) >= 3 and parts[1].isdigit():
+                idx = int(parts[1]) - 1
+                if 0 <= idx < len(categories):
+                    new_cat = " ".join(parts[2:])
+                    old_cat = categories[idx]
+                    categories[idx] = new_cat
+                    print(f"Edited: '{old_cat}' to '{new_cat}'")
+                else:
+                    print("Invalid category number.")
+            else:
+                print("Invalid command. Please try again.")
+        
+    # Save the final list of categories
+    with open(category_file, 'w', encoding='utf-8') as f:
+        json.dump(categories, f, indent=4)
+    print("\nStep 1.3: Categories saved for next session.")
+    
+    return categories
+
 # --- Load Models ---
 print("\nStep 1: Loading summarization and classification models...")
 print("If this is the first time you are running the script, a large file download will begin now. Please wait for it to complete.")
@@ -39,7 +112,7 @@ print("If this is the first time you are running the script, a large file downlo
 # Load the SMALLER summarization pipeline for speed
 summarizer = pipeline(
     "summarization",
-    model="sshleifer/distilbart-cnn-6-6", 
+    model="t5-small", 
     max_length=1024, 
     device=device,
     framework="pt"  # Explicitly tell the pipeline to use PyTorch
@@ -49,7 +122,7 @@ summarizer = pipeline(
 try:
     classifier = pipeline(
         "zero-shot-classification",
-        model="MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+        model="MoritzLaurer/xtremedistil-l6-h256-zeroshot-v1.1-all-33",
         device=device
     )
     print("Step 1.1: Classification model loaded successfully.")
@@ -57,6 +130,7 @@ except Exception as e:
     print(f"Error loading classification model: {e}")
     classifier = None
     print("Step 1.1: Falling back to 'Other' for all classifications.")
+
 
 # --- File Reading Functions ---
 def read_pdf(file_path):
@@ -201,7 +275,7 @@ def categorize_summary(summary_text, categories):
         return "Other"
 
 # --- Main Processing Logic ---
-def process_files_in_folder(folder_path):
+def process_files_in_folder(folder_path, scan_subdirectories, categories):
     """
     Walks a folder, processes supported files, and generates summaries.
     Includes detailed progress checks.
@@ -216,11 +290,19 @@ def process_files_in_folder(folder_path):
     
     print("\nStep 2: Starting folder scan...")
     file_list = []
-    for root, _, files in os.walk(folder_path):
-        for file in files:
-            ext = os.path.splitext(file)[1].lower()
-            if ext in supported_extensions:
-                file_list.append(os.path.join(root, file))
+    if scan_subdirectories:
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in supported_extensions:
+                    file_list.append(os.path.join(root, file))
+    else:
+        for file in os.listdir(folder_path):
+            file_path = os.path.join(folder_path, file)
+            if os.path.isfile(file_path):
+                ext = os.path.splitext(file)[1].lower()
+                if ext in supported_extensions:
+                    file_list.append(file_path)
 
     if not file_list:
         print("Step 3: No supported files found. Exiting.")
@@ -243,7 +325,7 @@ def process_files_in_folder(folder_path):
             # Categorize the summary
             summary_text = " ".join(bullet_points)
             print("Step 7.1: Categorizing summary offline...")
-            category = categorize_summary(summary_text, CATEGORIES)
+            category = categorize_summary(summary_text, categories)
 
             print("Step 8: Final summary complete.")
             
@@ -273,68 +355,74 @@ def process_files_in_folder(folder_path):
 # --- Main Execution ---
 if __name__ == "__main__":
     try:
-        folder_path = input("Enter the folder path containing the files: ").strip()
+        # Load or edit categories at the start
+        CATEGORIES = load_and_edit_categories()
 
-        # Check if the folder path is valid
-        if os.path.isdir(folder_path):
-            print("\nStep 10: Folder path is valid. Starting the batch process...")
-            process_files_in_folder(folder_path)
+        while True:
+            folder_path = input("Enter the folder path containing the files: ").strip()
+            if os.path.isdir(folder_path):
+                break
+            print("\nError: The provided path is not a valid directory. Please try again.")
 
-            # Prompt for file management after processing is complete
-            print("\n--- File Management ---")
-            category_to_move = input("Enter the category you want to move to its own folder (e.g., 'Health'): ").strip()
+        scan_sub_input = input("Scan subdirectories? (yes/no): ").strip().lower()
+        scan_subdirectories = scan_sub_input == 'yes'
+
+        print("\nStep 10: Folder path is valid. Starting the batch process...")
+        process_files_in_folder(folder_path, scan_subdirectories, CATEGORIES)
+
+        # Prompt for file management after processing is complete
+        print("\n--- File Management ---")
+        category_to_move = input("Enter the category you want to move to its own folder (e.g., 'Health'): ").strip()
+        
+        # Check if the user wants to move a valid category
+        if category_to_move in CATEGORIES and category_to_move != "Other":
             
-            # Check if the user wants to move a valid category
-            if category_to_move in CATEGORIES and category_to_move != "Other":
-                
-                # Ask for a prefix for renaming
-                prefix = input(f"Enter a prefix (max 8 characters) for renaming files in the '{category_to_move}' category: ").strip()
-                while len(prefix) > 8:
-                    print("Prefix is too long. Please enter a prefix with a maximum of 8 characters.")
-                    prefix = input("Enter a new prefix: ").strip()
+            # Ask for a prefix for renaming
+            prefix = input(f"Enter a prefix (max 8 characters) for renaming files in the '{category_to_move}' category: ").strip()
+            while len(prefix) > 8:
+                print("Prefix is too long. Please enter a prefix with a maximum of 8 characters.")
+                prefix = input("Enter a new prefix: ").strip()
 
-                # Create the destination folder
-                destination_folder = os.path.join(folder_path, category_to_move)
-                os.makedirs(destination_folder, exist_ok=True)
-                print(f"\nMoving and renaming files for category '{category_to_move}' to '{destination_folder}'...")
+            # Create the destination folder
+            destination_folder = os.path.join(folder_path, category_to_move)
+            os.makedirs(destination_folder, exist_ok=True)
+            print(f"\nMoving and renaming files for category '{category_to_move}' to '{destination_folder}'...")
 
-                # Iterate through files and move/rename them
-                for root, _, files in os.walk(folder_path):
-                    for file in files:
-                        if file.lower().endswith('_summary.txt'):
-                            file_path = os.path.join(root, file)
-                            try:
-                                with open(file_path, 'r', encoding='utf-8') as f:
-                                    content = f.read()
-                                    if f"Category: {category_to_move}" in content:
-                                        # Get the original file path and name
-                                        original_base_name = os.path.splitext(file)[0][:-8]
-                                        original_pdf_path = os.path.join(root, original_base_name + '.pdf')
+            # Iterate through files and move/rename them
+            for root, _, files in os.walk(folder_path):
+                for file in files:
+                    if file.lower().endswith('_summary.txt'):
+                        file_path = os.path.join(root, file)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                                if f"Category: {category_to_move}" in content:
+                                    # Get the original file path and name
+                                    original_base_name = os.path.splitext(file)[0][:-8]
+                                    original_pdf_path = os.path.join(root, original_base_name + '.pdf')
+                                    
+                                    # Create the new file names
+                                    new_pdf_name = f"{prefix}_{os.path.basename(original_pdf_path)}"
+                                    new_summary_name = f"{prefix}_{os.path.basename(file)}"
+                                    
+                                    destination_pdf_path = os.path.join(destination_folder, new_pdf_name)
+                                    summary_destination_path = os.path.join(destination_folder, new_summary_name)
+                                    
+                                    # Move the original PDF
+                                    if os.path.exists(original_pdf_path):
+                                        shutil.move(original_pdf_path, destination_pdf_path)
+                                        print(f"Moved and renamed: {original_pdf_path} -> {destination_pdf_path}")
                                         
-                                        # Create the new file names
-                                        new_pdf_name = f"{prefix}_{os.path.basename(original_pdf_path)}"
-                                        new_summary_name = f"{prefix}_{os.path.basename(file)}"
+                                    # Also move the summary file
+                                    shutil.move(file_path, summary_destination_path)
+                                    print(f"Moved and renamed: {file_path} -> {summary_destination_path}")
                                         
-                                        destination_pdf_path = os.path.join(destination_folder, new_pdf_name)
-                                        summary_destination_path = os.path.join(destination_folder, new_summary_name)
-                                        
-                                        # Move the original PDF
-                                        if os.path.exists(original_pdf_path):
-                                            shutil.move(original_pdf_path, destination_pdf_path)
-                                            print(f"Moved and renamed: {original_pdf_path} -> {destination_pdf_path}")
-                                            
-                                        # Also move the summary file
-                                        shutil.move(file_path, summary_destination_path)
-                                        print(f"Moved and renamed: {file_path} -> {summary_destination_path}")
-                                        
-                            except Exception as e:
-                                print(f"Error processing {file}: {e}")
+                        except Exception as e:
+                            print(f"Error processing {file}: {e}")
 
-                print("\nFile management complete.")
-            else:
-                print("No valid category selected for file management.")
+            print("\nFile management complete.")
         else:
-            print("\nError: The provided path is not a valid directory.")
+            print("No valid category selected for file management.")
             
     except KeyboardInterrupt:
         print("\nProcess interrupted by user. Exiting gracefully.")
