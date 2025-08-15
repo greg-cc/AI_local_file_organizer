@@ -61,9 +61,9 @@ def load_and_edit_categories():
         print(f"[{i+1}] {cat}")
     print("--------------------------")
     
-    edit_choice = input("Do you want to edit these categories? (yes/no): ").strip().lower()
-    if edit_choice == 'yes':
-        print("\nEditing categories. Enter 'add <new_category>', 'remove <number>', 'edit <number> <new_category>', or 'done' to finish.")
+    edit_choice = input("Do you want to edit these categories? (y/n) [default: no]: ").strip().lower()
+    if edit_choice in ['y', 'yes']:
+        print("\nEditing categories. Enter 'add <new_category>', 'remove <number>', 'edit <number> <new_category>', 'list', or 'done' to finish.")
         while True:
             command = input("> ").strip().lower()
             if command == 'done':
@@ -94,6 +94,11 @@ def load_and_edit_categories():
                     print(f"Edited: '{old_cat}' to '{new_cat}'")
                 else:
                     print("Invalid category number.")
+            elif action == 'list':
+                print("\n--- Current Categories ---")
+                for i, cat in enumerate(categories):
+                    print(f"[{i+1}] {cat}")
+                print("--------------------------")
             else:
                 print("Invalid command. Please try again.")
         
@@ -395,8 +400,8 @@ if __name__ == "__main__":
                 break
             print("\nError: The provided path is not a valid directory. Please try again.")
 
-        scan_sub_input = input("Scan subdirectories? (yes/no): ").strip().lower()
-        scan_subdirectories = scan_sub_input == 'yes'
+        scan_sub_input = input("Scan subdirectories? (y/n) [default: n]: ").strip().lower()
+        scan_subdirectories = scan_sub_input in ['y', 'yes']
 
         while True:
             num_chunks_input = input("Enter the number of chunks to summarize per file: ").strip()
@@ -414,8 +419,8 @@ if __name__ == "__main__":
         print("\n--- Define File Management Rules ---")
         for category in CATEGORIES:
             if category != "Other":
-                choice = input(f"Do you want to manage files for '{category}'? (yes/no): ").strip().lower()
-                if choice == 'yes':
+                choice = input(f"Do you want to manage files for '{category}'? (y/n) [default: n]: ").strip().lower()
+                if choice in ['y', 'yes']:
                     prefix = ""
                     while True:
                         prefix = input(f"Enter an 8-character prefix for '{category}': ").strip()
