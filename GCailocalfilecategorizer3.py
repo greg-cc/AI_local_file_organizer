@@ -26,10 +26,8 @@ MIN_SUMMARY_LENGTH = 80
 CATEGORIES = [
     "Health",
     "History",
-    "Zionism, Jews, and Israel",
-    "Surf, Weather, Metrological",
-    "Hyperspectral imaging including anything from JPL or mentioning spectral terms",
-    "Other"
+    "Weather",
+    "do not combine general categories with categories containing targeted things within it (delete this)"
 ]
 
 # --- Load and Edit Categories Function ---
@@ -41,10 +39,8 @@ def load_and_edit_categories():
     default_categories = [
         "Health",
         "History",
-        "Zionism, Jews, and Israel",
-        "Surf, Weather, Metrological",
-        "Hyperspectral imaging including anything from JPL or mentioning spectral terms",
-        "Other"
+        "Weather",
+        "do not combine general categories with categories containing targeted things within it (delete this)"
     ]
     categories = default_categories
     
@@ -78,11 +74,19 @@ def load_and_edit_categories():
                 new_cat = " ".join(parts[1:])
                 categories.append(new_cat)
                 print(f"Added: {new_cat}")
+                print("\n--- Current Categories ---")
+                for i, cat in enumerate(categories):
+                    print(f"[{i+1}] {cat}")
+                print("--------------------------")
             elif action == 'remove' and len(parts) == 2 and parts[1].isdigit():
                 idx = int(parts[1]) - 1
                 if 0 <= idx < len(categories):
                     removed_cat = categories.pop(idx)
                     print(f"Removed: {removed_cat}")
+                    print("\n--- Current Categories ---")
+                    for i, cat in enumerate(categories):
+                        print(f"[{i+1}] {cat}")
+                    print("--------------------------")
                 else:
                     print("Invalid category number.")
             elif action == 'edit' and len(parts) >= 3 and parts[1].isdigit():
@@ -92,6 +96,10 @@ def load_and_edit_categories():
                     old_cat = categories[idx]
                     categories[idx] = new_cat
                     print(f"Edited: '{old_cat}' to '{new_cat}'")
+                    print("\n--- Current Categories ---")
+                    for i, cat in enumerate(categories):
+                        print(f"[{i+1}] {cat}")
+                    print("--------------------------")
                 else:
                     print("Invalid category number.")
             elif action == 'list':
@@ -137,93 +145,99 @@ except Exception as e:
 
 
 # --- File Reading Functions ---
-def read_pdf(file_path, num_chunks):
-    """Extracts text from a PDF file using PyMuPDF, stopping after a specified number of chunks."""
+def read_pdf(file_path, start_chunk, end_chunk):
+    """Extracts text from a PDF file using PyMuPDF within a specified chunk range."""
     text = ""
     word_count = 0
+    current_chunk = 1
     try:
         with fitz.open(file_path) as pdf:
             for page in pdf:
                 page_text = page.get_text()
                 words = page_text.split()
-                if word_count + len(words) >= num_chunks * MAX_CHUNK_LENGTH:
-                    remaining_words = (num_chunks * MAX_CHUNK_LENGTH) - word_count
-                    text += " ".join(words[:remaining_words])
+                
+                if current_chunk > end_chunk:
                     break
-                else:
+
+                if start_chunk <= current_chunk <= end_chunk:
                     text += page_text
-                    word_count += len(words)
+
+                current_chunk += 1
     except Exception as e:
         print(f"Error reading PDF: {e}")
         text = ""
     return text
 
-def read_docx(file_path, num_chunks):
-    """Extracts text from a DOCX file, stopping after a specified number of chunks."""
+def read_docx(file_path, start_chunk, end_chunk):
+    """Extracts text from a DOCX file within a specified chunk range."""
     text = ""
-    word_count = 0
+    current_chunk = 1
     try:
         doc = Document(file_path)
         for para in doc.paragraphs:
             words = para.text.split()
-            if word_count + len(words) >= num_chunks * MAX_CHUNK_LENGTH:
-                remaining_words = (num_chunks * MAX_CHUNK_LENGTH) - word_count
-                text += " ".join(words[:remaining_words])
+            if current_chunk > end_chunk:
                 break
-            else:
+            
+            if start_chunk <= current_chunk <= end_chunk:
                 text += para.text + "\n"
-                word_count += len(words)
+                
+            current_chunk += len(words) // MAX_CHUNK_LENGTH + (1 if len(words) % MAX_CHUNK_LENGTH > 0 else 0)
     except Exception as e:
         print(f"Error reading DOCX: {e}")
         text = ""
     return text
 
-def read_txt(file_path, num_chunks):
-    """Reads text from a plain TXT file, stopping after a specified number of chunks."""
+def read_txt(file_path, start_chunk, end_chunk):
+    """Reads text from a plain TXT file within a specified chunk range."""
     text = ""
     try:
         with open(file_path, "r", encoding="utf-8") as file:
             words = file.read().split()
-            text = " ".join(words[:num_chunks * MAX_CHUNK_LENGTH])
+            start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
+            end_index = end_chunk * MAX_CHUNK_LENGTH
+            text = " ".join(words[start_index:end_index])
     except Exception as e:
         print(f"Error reading TXT: {e}")
         text = ""
     return text
 
-def read_excel(file_path, num_chunks):
-    """Extracts text from an XLSX (Excel) file, stopping after a specified number of chunks."""
+def read_excel(file_path, start_chunk, end_chunk):
+    """Extracts text from an XLSX (Excel) file within a specified chunk range."""
     text = ""
     try:
         sheets = pd.ExcelFile(file_path).sheet_names
         for sheet in sheets:
             df = pd.read_excel(file_path, sheet_name=sheet)
             words = df.to_string(index=False).split()
-            text = " ".join(words[:num_chunks * MAX_CHUNK_LENGTH])
-            if len(words) >= num_chunks * MAX_CHUNK_LENGTH:
+            start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
+            end_index = end_chunk * MAX_CHUNK_LENGTH
+            text = " ".join(words[start_index:end_index])
+            if len(words) >= end_index:
                 break
     except Exception as e:
         print(f"Error reading XLSX: {e}")
         text = ""
     return text
 
-def read_pptx(file_path, num_chunks):
-    """Extracts text from a PPTX (PowerPoint) file, stopping after a specified number of chunks."""
+def read_pptx(file_path, start_chunk, end_chunk):
+    """Extracts text from a PPTX (PowerPoint) file within a specified chunk range."""
     text = ""
-    word_count = 0
+    current_chunk = 1
     try:
         presentation = Presentation(file_path)
         for slide in presentation.slides:
             for shape in slide.shapes:
                 if shape.has_text_frame:
                     words = shape.text.split()
-                    if word_count + len(words) >= num_chunks * MAX_CHUNK_LENGTH:
-                        remaining_words = (num_chunks * MAX_CHUNK_LENGTH) - word_count
-                        text += " ".join(words[:remaining_words])
+                    if current_chunk > end_chunk:
                         break
-                    else:
+                    
+                    if start_chunk <= current_chunk <= end_chunk:
                         text += shape.text + "\n"
-                        word_count += len(words)
-            if word_count >= num_chunks * MAX_CHUNK_LENGTH:
+
+                    current_chunk += len(words) // MAX_CHUNK_LENGTH + (1 if len(words) % MAX_CHUNK_LENGTH > 0 else 0)
+            if current_chunk > end_chunk:
                 break
     except Exception as e:
         print(f"Error reading PPTX: {e}")
@@ -231,9 +245,9 @@ def read_pptx(file_path, num_chunks):
     return text
 
 # --- Summarization Function ---
-def summarize_text(text, num_chunks):
+def summarize_text(text, start_chunk, end_chunk):
     """
-    Generates a summary from a specified number of chunks of text.
+    Generates a summary from the specified chunks of text.
     """
     if not text.strip():
         return ["No text to summarize."]
@@ -244,7 +258,7 @@ def summarize_text(text, num_chunks):
     summaries = []
     
     # Process only the specified number of chunks
-    for i in range(min(num_chunks, len(chunks))):
+    for i in range(start_chunk - 1, min(end_chunk, len(chunks))):
         print(f"Step 6.1.1: Summarizing chunk {i + 1} of {len(chunks)}...")
         try:
             summary = summarizer(
@@ -279,7 +293,7 @@ def categorize_summary(summary_text, categories):
         return "Other"
 
 # --- Main Processing Logic ---
-def process_files_in_folder(folder_path, scan_subdirectories, categories, num_chunks, file_management_settings):
+def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings):
     """
     Walks a folder, processes supported files, and generates summaries.
     Includes detailed progress checks.
@@ -321,12 +335,12 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, num_ch
         print(f"\nStep 5: Processing file {i + 1}/{len(file_list)} - {os.path.basename(file_path)}")
         reader = supported_extensions[os.path.splitext(file_path)[1].lower()]
 
-        print(f"Step 6: Extracting first {num_chunks} chunks of text...")
-        text = reader(file_path, num_chunks)
+        print(f"Step 6: Extracting chunks from {start_chunk} to {end_chunk}...")
+        text = reader(file_path, start_chunk, end_chunk)
 
         if text.strip():
-            print("Step 7: First chunks extracted successfully. Starting summarization...")
-            bullet_points = summarize_text(text, num_chunks)
+            print("Step 7: Chunks extracted successfully. Starting summarization...")
+            bullet_points = summarize_text(text, start_chunk, end_chunk)
             
             # Categorize the summary
             summary_text = " ".join(bullet_points)
@@ -364,8 +378,8 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, num_ch
                 original_file_extension = os.path.splitext(file_path)[1]
                 original_file_name_no_ext = os.path.basename(os.path.splitext(file_path)[0])
                 
-                new_file_name = f"{prefix}_{original_file_name_no_ext}{original_file_extension}"
-                destination_pdf_path = os.path.join(destination_folder, new_file_name)
+                new_pdf_name = f"{prefix}_{original_file_name_no_ext}{original_file_extension}"
+                destination_pdf_path = os.path.join(destination_folder, new_pdf_name)
                 
                 if os.path.exists(file_path):
                     try:
@@ -397,43 +411,98 @@ if __name__ == "__main__":
         scan_subdirectories = scan_sub_input in ['y', 'yes']
 
         while True:
-            num_chunks_input = input("Enter the number of chunks to summarize per file: ").strip()
             try:
-                num_chunks_to_use = int(num_chunks_input)
-                if num_chunks_to_use > 0:
+                start_chunk_input = input("Enter the number of the first chunk: ").strip()
+                start_chunk_to_use = int(start_chunk_input)
+                if start_chunk_to_use > 0:
                     break
                 else:
                     print("Please enter a number greater than 0.")
             except ValueError:
                 print("Invalid input. Please enter a valid number.")
+        
+        while True:
+            try:
+                end_chunk_input = input("Enter the number of the last chunk: ").strip()
+                end_chunk_to_use = int(end_chunk_input)
+                if end_chunk_to_use >= start_chunk_to_use:
+                    break
+                else:
+                    print("Please enter a number greater than or equal to the starting chunk number.")
+            except ValueError:
+                print("Invalid input. Please enter a valid number.")
 
         # New logic to set up file management rules before processing
         file_management_settings = {}
-        print("\n--- Define File Management Rules ---")
-        for category in CATEGORIES:
-            if category != "Other":
-                choice = input(f"Do you want to manage files for '{category}'? (y/n) [default: n]: ").strip().lower()
-                if choice in ['y', 'yes']:
-                    prefix = ""
-                    while True:
-                        prefix = input(f"Enter an 8-character prefix for '{category}': ").strip()
-                        if len(prefix) <= 8:
-                            break
+        global_prefix_choice = input("\nDo you want to apply a global prefix to all files? (y/n) [default: n]: ").strip().lower()
+        
+        if global_prefix_choice in ['y', 'yes']:
+            global_prefix = ""
+            while True:
+                global_prefix = input("Enter a prefix (max 12 characters) for all files: ").strip()
+                if len(global_prefix) <= 12:
+                    break
+                else:
+                    print("Prefix is too long. Please enter a prefix with a maximum of 12 characters.")
+            
+            special_char = ""
+            while True:
+                special_char = input("Enter a special character to follow the prefix (1 to 3 characters): ").strip()
+                if 1 <= len(special_char) <= 3:
+                    break
+                else:
+                    print("Please enter 1 to 3 special characters.")
+            
+            # Apply the global prefix to all categories that will be managed
+            for category in CATEGORIES:
+                if category != "Other":
+                    file_management_settings[category] = {
+                        'prefix': f"{global_prefix}{special_char}",
+                        'destination': os.path.join(folder_path, category.replace(' ', '')[:12].upper())
+                    }
+        else:
+            print("\n--- Define File Management Rules ---")
+            for category in CATEGORIES:
+                if category != "Other":
+                    choice = input(f"Do you want to manage files for '{category}'? (y/n) [default: n]: ").strip().lower()
+                    if choice in ['y', 'yes']:
+                        # Ask the user for custom truncation and prefix
+                        prefix = ""
+                        truncate_choice = input(f"Do you want to define a custom prefix for '{category}'? (y/n) [default: n]: ").strip().lower()
+                        if truncate_choice in ['y', 'yes']:
+                            while True:
+                                word_to_truncate = input("Enter the word to truncate: ").strip()
+                                replacement = input("Enter the replacement prefix (e.g., 'H~-'): ").strip()
+                                
+                                # Construct the prefix based on user input
+                                temp_prefix = category.replace(word_to_truncate, replacement, 1)
+                                temp_prefix = temp_prefix.replace(' ', '')
+                                
+                                if len(temp_prefix) <= 12:
+                                    prefix = temp_prefix
+                                    break
+                                else:
+                                    print(f"The resulting prefix '{temp_prefix}' is too long (>{12} characters). Please try again.")
+                                    
                         else:
-                            print("Prefix must be 8 characters or less. Please try again.")
-                    
-                    dest_folder_name = input(f"Enter the destination folder name for '{category}' (leave blank to leave inplace and not move it'): ").strip()
-                    if dest_folder_name:
-                        file_management_settings[category] = {
-                            'prefix': prefix,
-                            'destination': os.path.join(folder_path, dest_folder_name)
-                        }
-                    else:
-                        print(f"Files for '{category}' will not be moved.")
+                            # Auto-generate a default prefix
+                            prefix = category.replace(' ', '')[:12].upper()
+                            print(f"Defaulting to prefix: '{prefix}'")
+                        
+                        dest_folder_name = input(f"Enter the destination folder name for '{category}' (leave blank to leave inplace and not move it'): ").strip()
+                        
+                        # Store settings only if a destination is provided
+                        if dest_folder_name:
+                            file_management_settings[category] = {
+                                'prefix': prefix,
+                                'destination': os.path.join(folder_path, dest_folder_name)
+                            }
+                        else:
+                            print(f"Files for '{category}' will not be moved.")
         print("\nStep 10: Folder path is valid. Starting the batch process...")
         
         # Call the main processing function and collect all summaries
-        all_summaries = process_files_in_folder(folder_path, scan_subdirectories, CATEGORIES, num_chunks_to_use, file_management_settings)
+        all_summaries = process_files_in_folder(folder_path, scan_subdirectories, CATEGORIES, start_chunk_to_use, end_chunk_to_use, file_management_settings)
 
         # Write all summaries to a single file at the end
         if all_summaries:
