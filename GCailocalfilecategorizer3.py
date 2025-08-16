@@ -134,7 +134,7 @@ summarizer = pipeline(
 try:
     classifier = pipeline(
         "zero-shot-classification",
-        model="MoritzLaurer/xtremedistil-l6-h256-zeroshot-v1.1-all-33",
+        model="MoritzLaurer/xtremedistil-l6-h256-mnli-fever-anli-ling-binary",
         device=device
     )
     print("Step 1.1: Classification model loaded successfully.")
@@ -434,39 +434,46 @@ if __name__ == "__main__":
 
         # New logic to set up file management rules before processing
         file_management_settings = {}
-        global_prefix_choice = input("\nDo you want to apply a global prefix to all files? (y/n) [default: n]: ").strip().lower()
         
-        if global_prefix_choice in ['y', 'yes']:
-            global_prefix = ""
-            while True:
-                global_prefix = input("Enter a prefix (max 12 characters) for all files: ").strip()
-                if len(global_prefix) <= 12:
-                    break
-                else:
-                    print("Prefix is too long. Please enter a prefix with a maximum of 12 characters.")
+        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip().lower()
+        
+        if move_and_rename_choice in ['y', 'yes']:
+            print("\n--- Define Global Prefix ---")
             
-            special_char = ""
-            while True:
+            prefix_choice = input(f"Do you want to define a custom prefix for all files? (y/n) [default: no]: ").strip().lower()
+            if prefix_choice in ['y', 'yes']:
+                while True:
+                    prefix = input("Enter a prefix (max 12 characters): ").strip()
+                    if len(prefix) <= 12:
+                        break
+                    else:
+                        print("Prefix is too long. Please enter a prefix with a maximum of 12 characters.")
+                
                 special_char = input("Enter a special character to follow the prefix (1 to 3 characters): ").strip()
-                if 1 <= len(special_char) <= 3:
-                    break
-                else:
+                while not 1 <= len(special_char) <= 3:
                     print("Please enter 1 to 3 special characters.")
-            
-            # Apply the global prefix to all categories that will be managed
-            for category in CATEGORIES:
-                if category != "Other":
-                    file_management_settings[category] = {
-                        'prefix': f"{global_prefix}{special_char}",
-                        'destination': os.path.join(folder_path, category.replace(' ', '')[:12].upper())
-                    }
+                    special_char = input("Enter a new special character: ").strip()
+                
+                for category in CATEGORIES:
+                    if category != "Other":
+                        file_management_settings[category] = {
+                            'prefix': f"{prefix}{special_char}",
+                            'destination': os.path.join(folder_path, category.replace(' ', '')[:12].upper())
+                        }
+            else:
+                print("Files will not be renamed.")
+                for category in CATEGORIES:
+                    if category != "Other":
+                        file_management_settings[category] = {
+                            'prefix': '',
+                            'destination': os.path.join(folder_path, category.replace(' ', '')[:12].upper())
+                        }
         else:
             print("\n--- Define File Management Rules ---")
             for category in CATEGORIES:
                 if category != "Other":
                     choice = input(f"Do you want to manage files for '{category}'? (y/n) [default: n]: ").strip().lower()
                     if choice in ['y', 'yes']:
-                        # Ask the user for custom truncation and prefix
                         prefix = ""
                         truncate_choice = input(f"Do you want to define a custom prefix for '{category}'? (y/n) [default: n]: ").strip().lower()
                         if truncate_choice in ['y', 'yes']:
@@ -474,7 +481,6 @@ if __name__ == "__main__":
                                 word_to_truncate = input("Enter the word to truncate: ").strip()
                                 replacement = input("Enter the replacement prefix (e.g., 'H~-'): ").strip()
                                 
-                                # Construct the prefix based on user input
                                 temp_prefix = category.replace(word_to_truncate, replacement, 1)
                                 temp_prefix = temp_prefix.replace(' ', '')
                                 
@@ -483,15 +489,12 @@ if __name__ == "__main__":
                                     break
                                 else:
                                     print(f"The resulting prefix '{temp_prefix}' is too long (>{12} characters). Please try again.")
-                                    
                         else:
-                            # Auto-generate a default prefix
                             prefix = category.replace(' ', '')[:12].upper()
                             print(f"Defaulting to prefix: '{prefix}'")
                         
                         dest_folder_name = input(f"Enter the destination folder name for '{category}' (leave blank to leave inplace and not move it'): ").strip()
                         
-                        # Store settings only if a destination is provided
                         if dest_folder_name:
                             file_management_settings[category] = {
                                 'prefix': prefix,
@@ -501,10 +504,8 @@ if __name__ == "__main__":
                             print(f"Files for '{category}' will not be moved.")
         print("\nStep 10: Folder path is valid. Starting the batch process...")
         
-        # Call the main processing function and collect all summaries
         all_summaries = process_files_in_folder(folder_path, scan_subdirectories, CATEGORIES, start_chunk_to_use, end_chunk_to_use, file_management_settings)
 
-        # Write all summaries to a single file at the end
         if all_summaries:
             print("\n--- Saving all summaries to a single file ---")
             consolidated_summary_file = os.path.join(folder_path, "all_summaries.txt")
