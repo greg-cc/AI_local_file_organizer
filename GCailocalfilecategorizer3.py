@@ -5,9 +5,62 @@ import pandas as pd
 from pptx import Presentation
 from transformers import pipeline
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers.pipelines.text_classification import TextClassificationPipeline
 import shutil
 import json
+
+# --- Custom Pipeline for Zero-Shot Classification with Threshold ---
+class ThresholdZeroShotClassificationPipeline(TextClassificationPipeline):
+    """
+    Custom pipeline for zero-shot classification that returns 'Other' if the top
+    score is below a specified threshold.
+    """
+    def __init__(self, *args, threshold=0.1, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.threshold = threshold
+
+    def __call__(self, sequences, *args, **kwargs):
+        # Run the standard zero-shot classification
+        results = super().__call__(sequences, *args, **kwargs)
+
+        # Process results to apply the threshold
+        processed_results = []
+        # The pipeline can return a single dict or a list of dicts
+        if isinstance(results, dict):
+            results = [results]
+
+        for result in results:
+            if result['scores'][0] >= self.threshold:
+                processed_results.append(result['labels'][0])
+            else:
+                processed_results.append("Other")
+
+        # Return a single string if only one sequence was passed, else a list of strings
+        return processed_results[0] if len(processed_results) == 1 else processed_results
+
+# --- Model Selection Function ---
+def select_summarization_model():
+    """
+    Prompts the user to select a summarization model from a list of options.
+    """
+    print("\nPlease select a summarization model to use:")
+    print("1: t5-small (Balanced speed and quality - Default)")
+    print("2: sshleifer/distilbart-cnn-12-6 (Faster, distilled model for speed)")
+    print("3: facebook/bart-large-cnn (Larger, higher quality model - Slower)")
+    
+    models = {
+        "1": "t5-small",
+        "2": "sshleifer/distilbart-cnn-12-6",
+        "3": "facebook/bart-large-cnn"
+    }
+    
+    while True:
+        choice = input("Enter your choice (1, 2, or 3): ").strip()
+        if choice in models:
+            return models[choice]
+        elif choice == "": # Default option
+            return models["1"]
+        print("Invalid choice. Please enter 1, 2, or 3.")
 
 # Check for GPU availability and set the device
 if torch.cuda.is_available():
@@ -19,16 +72,9 @@ else:
 
 # --- Configuration ---
 MAX_CHUNK_LENGTH = 512
-MAX_SUMMARY_LENGTH = 300
-MIN_SUMMARY_LENGTH = 80
-
-# Define the categories for categorization
-CATEGORIES = [
-    "Health",
-    "History",
-    "Weather",
-    "do not combine general categories with categories containing targeted things within it (delete this)"
-]
+MAX_SUMMARY_LENGTH = 400
+MIN_SUMMARY_LENGTH = 220
+CLASSIFIER_THRESHOLD = 0.1  # Default configurable threshold
 
 # --- Load and Edit Categories Function ---
 def load_and_edit_categories():
@@ -40,7 +86,8 @@ def load_and_edit_categories():
         "Health",
         "History",
         "Weather",
-        "do not combine general categories with categories containing targeted things within it (delete this)"
+        "Technology",
+        "Finance"
     ]
     categories = default_categories
     
@@ -61,32 +108,24 @@ def load_and_edit_categories():
     if edit_choice in ['y', 'yes']:
         print("\nEditing categories. Enter 'add <new_category>', 'remove <number>', 'edit <number> <new_category>', 'list', or 'done' to finish.")
         while True:
-            command = input("> ").strip().lower()
-            if command == 'done':
+            command = input("> ").strip()
+            if command.lower() == 'done':
                 break
             
             parts = command.split()
             if not parts:
                 continue
 
-            action = parts[0]
+            action = parts[0].lower()
             if action == 'add' and len(parts) >= 2:
                 new_cat = " ".join(parts[1:])
                 categories.append(new_cat)
                 print(f"Added: {new_cat}")
-                print("\n--- Current Categories ---")
-                for i, cat in enumerate(categories):
-                    print(f"[{i+1}] {cat}")
-                print("--------------------------")
             elif action == 'remove' and len(parts) == 2 and parts[1].isdigit():
                 idx = int(parts[1]) - 1
                 if 0 <= idx < len(categories):
                     removed_cat = categories.pop(idx)
                     print(f"Removed: {removed_cat}")
-                    print("\n--- Current Categories ---")
-                    for i, cat in enumerate(categories):
-                        print(f"[{i+1}] {cat}")
-                    print("--------------------------")
                 else:
                     print("Invalid category number.")
             elif action == 'edit' and len(parts) >= 3 and parts[1].isdigit():
@@ -96,19 +135,17 @@ def load_and_edit_categories():
                     old_cat = categories[idx]
                     categories[idx] = new_cat
                     print(f"Edited: '{old_cat}' to '{new_cat}'")
-                    print("\n--- Current Categories ---")
-                    for i, cat in enumerate(categories):
-                        print(f"[{i+1}] {cat}")
-                    print("--------------------------")
                 else:
                     print("Invalid category number.")
             elif action == 'list':
-                print("\n--- Current Categories ---")
-                for i, cat in enumerate(categories):
-                    print(f"[{i+1}] {cat}")
-                print("--------------------------")
+                pass # The list will be printed below
             else:
                 print("Invalid command. Please try again.")
+
+            print("\n--- Current Categories ---")
+            for i, cat in enumerate(categories):
+                print(f"[{i+1}] {cat}")
+            print("--------------------------")
         
     # Save the final list of categories
     with open(category_file, 'w', encoding='utf-8') as f:
@@ -117,75 +154,39 @@ def load_and_edit_categories():
     
     return categories
 
-# --- Load Models ---
-print("\nStep 1: Loading summarization and classification models...")
-print("If this is the first time you are running the script, a large file download will begin now. Please wait for it to complete.")
-
-# Load the SMALLER summarization pipeline for speed
-summarizer = pipeline(
-    "summarization",
-    model="t5-small", 
-    max_length=1024, 
-    device=device,
-    framework="pt"  # Explicitly tell the pipeline to use PyTorch
-)
-
-# Load a dedicated model for text classification
-try:
-    classifier = pipeline(
-        "zero-shot-classification",
-        model="MoritzLaurer/xtremedistil-l6-h256-mnli-fever-anli-ling-binary",
-        device=device
-    )
-    print("Step 1.1: Classification model loaded successfully.")
-except Exception as e:
-    print(f"Error loading classification model: {e}")
-    classifier = None
-    print("Step 1.1: Falling back to 'Other' for all classifications.")
-
-
 # --- File Reading Functions ---
 def read_pdf(file_path, start_chunk, end_chunk):
-    """Extracts text from a PDF file using PyMuPDF within a specified chunk range."""
+    """Extracts text from a PDF file within a specified word-chunk range."""
     text = ""
-    word_count = 0
-    current_chunk = 1
     try:
+        full_text = ""
         with fitz.open(file_path) as pdf:
             for page in pdf:
-                page_text = page.get_text()
-                words = page_text.split()
-                
-                if current_chunk > end_chunk:
-                    break
-
-                if start_chunk <= current_chunk <= end_chunk:
-                    text += page_text
-
-                current_chunk += 1
+                full_text += page.get_text()
+        
+        words = full_text.split()
+        start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
+        end_index = end_chunk * MAX_CHUNK_LENGTH
+        # Ensure we don't go out of bounds
+        end_index = min(end_index, len(words))
+        
+        text = " ".join(words[start_index:end_index])
     except Exception as e:
         print(f"Error reading PDF: {e}")
-        text = ""
     return text
 
 def read_docx(file_path, start_chunk, end_chunk):
     """Extracts text from a DOCX file within a specified chunk range."""
     text = ""
-    current_chunk = 1
     try:
         doc = Document(file_path)
-        for para in doc.paragraphs:
-            words = para.text.split()
-            if current_chunk > end_chunk:
-                break
-            
-            if start_chunk <= current_chunk <= end_chunk:
-                text += para.text + "\n"
-                
-            current_chunk += len(words) // MAX_CHUNK_LENGTH + (1 if len(words) % MAX_CHUNK_LENGTH > 0 else 0)
+        full_text = "\n".join([para.text for para in doc.paragraphs])
+        words = full_text.split()
+        start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
+        end_index = end_chunk * MAX_CHUNK_LENGTH
+        text = " ".join(words[start_index:end_index])
     except Exception as e:
         print(f"Error reading DOCX: {e}")
-        text = ""
     return text
 
 def read_txt(file_path, start_chunk, end_chunk):
@@ -199,55 +200,46 @@ def read_txt(file_path, start_chunk, end_chunk):
             text = " ".join(words[start_index:end_index])
     except Exception as e:
         print(f"Error reading TXT: {e}")
-        text = ""
     return text
 
 def read_excel(file_path, start_chunk, end_chunk):
     """Extracts text from an XLSX (Excel) file within a specified chunk range."""
     text = ""
     try:
-        sheets = pd.ExcelFile(file_path).sheet_names
-        for sheet in sheets:
-            df = pd.read_excel(file_path, sheet_name=sheet)
-            words = df.to_string(index=False).split()
-            start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
-            end_index = end_chunk * MAX_CHUNK_LENGTH
-            text = " ".join(words[start_index:end_index])
-            if len(words) >= end_index:
-                break
+        df = pd.read_excel(file_path, sheet_name=None)
+        full_text = ""
+        for sheet_name in df:
+            full_text += df[sheet_name].to_string(index=False) + "\n"
+        words = full_text.split()
+        start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
+        end_index = end_chunk * MAX_CHUNK_LENGTH
+        text = " ".join(words[start_index:end_index])
     except Exception as e:
         print(f"Error reading XLSX: {e}")
-        text = ""
     return text
 
 def read_pptx(file_path, start_chunk, end_chunk):
     """Extracts text from a PPTX (PowerPoint) file within a specified chunk range."""
     text = ""
-    current_chunk = 1
     try:
         presentation = Presentation(file_path)
+        full_text = ""
         for slide in presentation.slides:
             for shape in slide.shapes:
                 if shape.has_text_frame:
-                    words = shape.text.split()
-                    if current_chunk > end_chunk:
-                        break
-                    
-                    if start_chunk <= current_chunk <= end_chunk:
-                        text += shape.text + "\n"
-
-                    current_chunk += len(words) // MAX_CHUNK_LENGTH + (1 if len(words) % MAX_CHUNK_LENGTH > 0 else 0)
-            if current_chunk > end_chunk:
-                break
+                    full_text += shape.text + "\n"
+        words = full_text.split()
+        start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
+        end_index = end_chunk * MAX_CHUNK_LENGTH
+        text = " ".join(words[start_index:end_index])
     except Exception as e:
         print(f"Error reading PPTX: {e}")
-        text = ""
     return text
 
 # --- Summarization Function ---
-def summarize_text(text, start_chunk, end_chunk):
+def summarize_text(text, summarizer_pipeline):
     """
-    Generates a summary from the specified chunks of text.
+    Generates a summary from the text using the provided summarizer pipeline.
     """
     if not text.strip():
         return ["No text to summarize."]
@@ -257,12 +249,11 @@ def summarize_text(text, start_chunk, end_chunk):
     
     summaries = []
     
-    # Process only the specified number of chunks
-    for i in range(start_chunk - 1, min(end_chunk, len(chunks))):
+    for i, chunk in enumerate(chunks):
         print(f"Step 6.1.1: Summarizing chunk {i + 1} of {len(chunks)}...")
         try:
-            summary = summarizer(
-                chunks[i], 
+            summary = summarizer_pipeline(
+                chunk, 
                 max_length=MAX_SUMMARY_LENGTH, 
                 min_length=MIN_SUMMARY_LENGTH, 
                 truncation=True
@@ -273,30 +264,28 @@ def summarize_text(text, start_chunk, end_chunk):
             print(f"Step 6.1.3: Error during summarization of chunk {i + 1}: {e}")
             summaries.append("Summary failed for this chunk.")
     
-    # Combine the chunk summaries and return as a single list of bullet points
     combined_summary = ". ".join(summaries)
-    return combined_summary.split(". ")
+    return [s.strip() for s in combined_summary.split(".") if s.strip()]
     
 # --- Categorization Function ---
-def categorize_summary(summary_text, categories):
-    """Categorizes a summary using a zero-shot classification model."""
-    if classifier is None:
+def categorize_summary(summary_text, categories, classifier_pipeline):
+    """Categorizes a summary using a zero-shot classification model with a built-in threshold."""
+    if classifier_pipeline is None:
         return "Other"
 
     print("Step 7.1.1: Sending summary to classifier model...")
     try:
-        results = classifier(summary_text, candidate_labels=categories)
-        print("Step 7.1.2: Categorization complete.")
-        return results['labels'][0]
+        # The custom pipeline expects candidate_labels as a keyword argument
+        category = classifier_pipeline(summary_text, candidate_labels=categories)
+        return category
     except Exception as e:
         print(f"Step 7.1.3: Error during AI categorization: {e}")
         return "Other"
 
 # --- Main Processing Logic ---
-def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings):
+def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer, classifier):
     """
     Walks a folder, processes supported files, and generates summaries.
-    Includes detailed progress checks.
     """
     supported_extensions = {
         ".pdf": read_pdf, 
@@ -330,63 +319,53 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
 
     all_summaries = []
 
-    # Main loop to process files one-by-one and display summaries immediately
     for i, file_path in enumerate(file_list):
         print(f"\nStep 5: Processing file {i + 1}/{len(file_list)} - {os.path.basename(file_path)}")
         reader = supported_extensions[os.path.splitext(file_path)[1].lower()]
 
-        print(f"Step 6: Extracting chunks from {start_chunk} to {end_chunk}...")
+        print(f"Step 6: Extracting text from chunks {start_chunk} to {end_chunk}...")
         text = reader(file_path, start_chunk, end_chunk)
 
         if text.strip():
-            print("Step 7: Chunks extracted successfully. Starting summarization...")
-            bullet_points = summarize_text(text, start_chunk, end_chunk)
+            print("Step 7: Text extracted successfully. Starting summarization...")
+            bullet_points = summarize_text(text, summarizer)
             
-            # Categorize the summary
             summary_text = " ".join(bullet_points)
-            print("Step 7.1: Categorizing summary offline...")
-            category = categorize_summary(summary_text, categories)
+            print("Step 7.1: Categorizing summary...")
+            category = categorize_summary(summary_text, categories, classifier)
 
             print("Step 8: Final summary complete.")
             
-            # --- Display and Save Summary Immediately ---
-            summary_file_path = os.path.splitext(file_path)[0] + "_summary.txt"
-            
-            # Print to screen
             print(f"\nFile: {file_path}\nCategory: {category}\nSummary:\n")
             summary_text_for_file = ""
             for point in bullet_points:
-                print(f"- {point.strip()}")
-                summary_text_for_file += f"- {point.strip()}\n"
+                print(f"- {point}")
+                summary_text_for_file += f"- {point}\n"
             print("\n" + "-"*50)
 
-            # Store the summary information for the final consolidated file
             all_summaries.append({
                 'file_path': os.path.abspath(file_path),
                 'category': category,
                 'summary': summary_text_for_file
             })
 
-            # Perform file management immediately after saving
             if category in file_management_settings and file_management_settings[category].get('destination'):
                 settings = file_management_settings[category]
-                prefix = settings['prefix']
+                prefix = settings.get('prefix', '')
                 destination_folder = settings['destination']
                 
                 os.makedirs(destination_folder, exist_ok=True)
 
-                original_file_extension = os.path.splitext(file_path)[1]
-                original_file_name_no_ext = os.path.basename(os.path.splitext(file_path)[0])
+                original_file_name, original_file_extension = os.path.splitext(os.path.basename(file_path))
                 
-                new_pdf_name = f"{prefix}_{original_file_name_no_ext}{original_file_extension}"
-                destination_pdf_path = os.path.join(destination_folder, new_pdf_name)
+                new_file_name = f"{prefix}{original_file_name}{original_file_extension}"
+                destination_path = os.path.join(destination_folder, new_file_name)
                 
-                if os.path.exists(file_path):
-                    try:
-                        shutil.move(file_path, destination_pdf_path)
-                        print(f"Moved and renamed: {file_path} -> {destination_pdf_path}")
-                    except Exception as move_e:
-                        print(f"Error moving original file: {move_e}")
+                try:
+                    shutil.move(file_path, destination_path)
+                    print(f"Moved and renamed: {file_path} -> {destination_path}")
+                except Exception as move_e:
+                    print(f"Error moving original file: {move_e}")
                 
         else:
             print("Step 8.1: Skipping file - unable to extract meaningful text.")
@@ -398,7 +377,35 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
 # --- Main Execution ---
 if __name__ == "__main__":
     try:
-        # Load or edit categories at the start
+        # VERY FIRST QUESTION: Select the summarization model
+        summarizer_model_name = select_summarization_model()
+
+        # --- Load Models ---
+        print(f"\nStep 1: Loading summarization model ({summarizer_model_name}) and classification model...")
+        print("If this is the first time you are running the script, a large file download will begin now. Please wait for it to complete.")
+
+        summarizer = pipeline(
+            "summarization",
+            model=summarizer_model_name, 
+            max_length=1024, 
+            device=device,
+            framework="pt"
+        )
+
+        try:
+            classifier = pipeline(
+                task="zero-shot-classification",
+                model="MoritzLaurer/xtremedistil-l6-h256-mnli-fever-anli-ling-binary",
+                device=device,
+                pipeline_class=ThresholdZeroShotClassificationPipeline,
+                threshold=CLASSIFIER_THRESHOLD
+            )
+            print("Step 1.1: Classification model loaded successfully with custom threshold.")
+        except Exception as e:
+            print(f"Error loading classification model: {e}")
+            classifier = None
+            print("Step 1.1: Falling back to 'Other' for all classifications.")
+
         CATEGORIES = load_and_edit_categories()
 
         while True:
@@ -412,7 +419,7 @@ if __name__ == "__main__":
 
         while True:
             try:
-                start_chunk_input = input("Enter the number of the first chunk: ").strip()
+                start_chunk_input = input("Enter the number of the first chunk (e.g., page number): ").strip()
                 start_chunk_to_use = int(start_chunk_input)
                 if start_chunk_to_use > 0:
                     break
@@ -432,90 +439,50 @@ if __name__ == "__main__":
             except ValueError:
                 print("Invalid input. Please enter a valid number.")
 
-        # New logic to set up file management rules before processing
         file_management_settings = {}
-        
         move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip().lower()
         
         if move_and_rename_choice in ['y', 'yes']:
-            print("\n--- Define Global Prefix ---")
+            print("\n--- Define Global File Management Rules ---")
+            prefix = input("Enter a global prefix for all renamed files (e.g., 'PROJ_') [leave blank for none]: ").strip()
             
-            prefix_choice = input(f"Do you want to define a custom prefix for all files? (y/n) [default: no]: ").strip().lower()
-            if prefix_choice in ['y', 'yes']:
-                while True:
-                    prefix = input("Enter a prefix (max 12 characters): ").strip()
-                    if len(prefix) <= 12:
-                        break
-                    else:
-                        print("Prefix is too long. Please enter a prefix with a maximum of 12 characters.")
-                
-                special_char = input("Enter a special character to follow the prefix (1 to 3 characters): ").strip()
-                while not 1 <= len(special_char) <= 3:
-                    print("Please enter 1 to 3 special characters.")
-                    special_char = input("Enter a new special character: ").strip()
-                
-                for category in CATEGORIES:
-                    if category != "Other":
-                        file_management_settings[category] = {
-                            'prefix': f"{prefix}{special_char}",
-                            'destination': os.path.join(folder_path, category.replace(' ', '')[:12].upper())
-                        }
-            else:
-                print("Files will not be renamed.")
-                for category in CATEGORIES:
-                    if category != "Other":
-                        file_management_settings[category] = {
-                            'prefix': '',
-                            'destination': os.path.join(folder_path, category.replace(' ', '')[:12].upper())
-                        }
-        else:
-            print("\n--- Define File Management Rules ---")
             for category in CATEGORIES:
                 if category != "Other":
-                    choice = input(f"Do you want to manage files for '{category}'? (y/n) [default: n]: ").strip().lower()
-                    if choice in ['y', 'yes']:
-                        prefix = ""
-                        truncate_choice = input(f"Do you want to define a custom prefix for '{category}'? (y/n) [default: n]: ").strip().lower()
-                        if truncate_choice in ['y', 'yes']:
-                            while True:
-                                word_to_truncate = input("Enter the word to truncate: ").strip()
-                                replacement = input("Enter the replacement prefix (e.g., 'H~-'): ").strip()
-                                
-                                temp_prefix = category.replace(word_to_truncate, replacement, 1)
-                                temp_prefix = temp_prefix.replace(' ', '')
-                                
-                                if len(temp_prefix) <= 12:
-                                    prefix = temp_prefix
-                                    break
-                                else:
-                                    print(f"The resulting prefix '{temp_prefix}' is too long (>{12} characters). Please try again.")
-                        else:
-                            prefix = category.replace(' ', '')[:12].upper()
-                            print(f"Defaulting to prefix: '{prefix}'")
-                        
-                        dest_folder_name = input(f"Enter the destination folder name for '{category}' (leave blank to leave inplace and not move it'): ").strip()
-                        
-                        if dest_folder_name:
-                            file_management_settings[category] = {
-                                'prefix': prefix,
-                                'destination': os.path.join(folder_path, dest_folder_name)
-                            }
-                        else:
-                            print(f"Files for '{category}' will not be moved.")
-        print("\nStep 10: Folder path is valid. Starting the batch process...")
+                    # Automatically create a destination folder based on the category name
+                    dest_folder_name = category.replace(' ', '_')
+                    file_management_settings[category] = {
+                        'prefix': prefix,
+                        'destination': os.path.join(folder_path, dest_folder_name)
+                    }
+            print("File management rules have been set up automatically for all categories.")
+
+
+        print("\nStep 10: Starting the batch process...")
         
-        all_summaries = process_files_in_folder(folder_path, scan_subdirectories, CATEGORIES, start_chunk_to_use, end_chunk_to_use, file_management_settings)
+        all_summaries = process_files_in_folder(
+            folder_path, 
+            scan_subdirectories, 
+            CATEGORIES, 
+            start_chunk_to_use, 
+            end_chunk_to_use, 
+            file_management_settings,
+            summarizer,
+            classifier
+        )
 
         if all_summaries:
-            print("\n--- Saving all summaries to a single file ---")
             consolidated_summary_file = os.path.join(folder_path, "all_summaries.txt")
+            print(f"\n--- Saving all summaries to {consolidated_summary_file} ---")
             with open(consolidated_summary_file, "w", encoding="utf-8") as f:
                 for summary_data in all_summaries:
                     f.write("="*50 + "\n")
                     f.write(f"File: {summary_data['file_path']}\n")
                     f.write(f"Category: {summary_data['category']}\n\n")
                     f.write(f"Summary:\n{summary_data['summary']}\n")
-            print(f"All summaries consolidated into: {consolidated_summary_file}")
+            print("All summaries consolidated.")
             
     except KeyboardInterrupt:
         print("\nProcess interrupted by user. Exiting gracefully.")
+    except Exception as e:
+        print(f"\nAn unexpected error occurred: {e}")
+
