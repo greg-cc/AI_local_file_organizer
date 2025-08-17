@@ -155,7 +155,9 @@ def get_summary_lengths():
             
             # Ensure max_length is always greater than min_length
             if max_len_to_use < min_len_to_use:
-                print(f"Error: Max length ({max_len_to_use}) must be greater than min length ({min_len_to_use}). Automatically adjusting max length to {min_len_to_use + 50}.")
+                print(f"Error: Max length ({max_len_to_use}) must be greater than min length ({min_len_to_use}). Automatically adjusting max length to 
+
+{min_len_to_use + 50}.")
                 max_len_to_use = min_len_to_use + 50
 
             break
@@ -533,7 +535,9 @@ def categorize_summary(summary_text, categories, classifier_pipeline, threshold,
         return "Other"
 
 # --- Main Processing Logic ---
-def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer_pipeline, classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_size, color_code):
+def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer_pipeline, 
+
+classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_size, color_code):
     """
     Walks a folder, processes supported files, and generates summaries.
     """
@@ -618,7 +622,9 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
                             break
                         end_index = start_index + len(cat)
                         original_text = display_summary[start_index:end_index]
-                        display_summary = display_summary[:start_index] + COLOR_START + BOLD_START + original_text + COLOR_END + BOLD_END + display_summary[end_index:]
+                        display_summary = display_summary[:start_index] + COLOR_START + BOLD_START + original_text + COLOR_END + BOLD_END + 
+
+display_summary[end_index:]
                         start_index += len(COLOR_START) + len(BOLD_START) + len(COLOR_END) + len(BOLD_END) + len(cat)
             
             # Print the formatted summary
@@ -635,8 +641,15 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
                 'summary': summary_text_for_file
             })
 
-            if category in file_management_settings and file_management_settings[category].get('destination'):
-                settings = file_management_settings[category]
+            # FIX: Added specific logic to handle files categorized as "Other"
+            final_category = category
+            if final_category not in file_management_settings:
+                final_category = "Other"
+                dest_folder_name = "Other"
+                file_management_settings[final_category] = {'destination': os.path.join(folder_path, dest_folder_name), 'prefix': ''}
+
+            if final_category in file_management_settings and file_management_settings[final_category].get('destination'):
+                settings = file_management_settings[final_category]
                 prefix = settings.get('prefix', '')
                 destination_folder = settings['destination']
                 
@@ -721,7 +734,9 @@ if __name__ == "__main__":
         # --- Load Models ---
         print(f"\nStep 1: Loading summarization model ({summarizer_model_name}) and classification model...")
         print("If this is the first time you are running the script, a large file download will begin now. Please wait for it to complete.")
-        print("Note: If the script appears unresponsive during this step, it is likely downloading a large file. Forcing a stop with Ctrl+C may not be immediate during these operations.")
+        print("Note: If the script appears unresponsive during this step, it is likely downloading a large file. Forcing a stop with Ctrl+C may not be 
+
+immediate during these operations.")
 
         try:
             print("Step 1a: Explicitly loading tokenizer...")
@@ -791,7 +806,9 @@ if __name__ == "__main__":
                 print("Invalid input. Please enter a valid number.")
 
         file_management_settings = {}
-        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip().lower()
+        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip
+
+().lower()
         
         if move_and_rename_choice in ['y', 'yes']:
             print("\n--- Define Global File Management Rules ---")
@@ -804,6 +821,12 @@ if __name__ == "__main__":
                         'prefix': prefix,
                         'destination': os.path.join(folder_path, dest_folder_name)
                     }
+            # Automatically add a rule for the "Other" category
+            file_management_settings['Other'] = {
+                'prefix': prefix,
+                'destination': os.path.join(folder_path, 'Other')
+            }
+
             print("File management rules have been set up automatically for all categories.")
 
 
