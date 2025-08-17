@@ -44,23 +44,42 @@ def select_summarization_model():
     Prompts the user to select a summarization model from a list of options.
     """
     print("\nPlease select a summarization model to use:")
+    print("\n--- General Purpose ---")
     print("1: t5-small (Balanced speed and quality - Default)")
     print("2: sshleifer/distilbart-cnn-12-6 (Faster, distilled model for speed)")
     print("3: facebook/bart-large-cnn (Larger, higher quality model - Slower)")
+    print("\n--- Specialized Models ---")
+    print("4: google/pegasus-xsum (Headline-style summaries)")
+    print("5: mrm8488/t5-base-finetuned-summarize-news (Specialized for news articles)")
+    print("6: philschmid/bart-large-cnn-samsum (Specialized for conversations/dialogue)")
+    print("7: Falconsai/medical_summarization (High-performing for medical text)")
+    print("8: KedarPanchal/flan-t5-small-summary-finetune (For complex technical documents)")
+    print("\n--- Multilingual & Resource-Efficient Models ---")
+    print("9: csebuetnlp/mT5_multilingual_XLSum (Summarizes in 44 languages)")
+    print("10: ainize/kobart-news (Specialized for Korean news)")
+    print("11: google/t5-efficient-mini (Resource-efficient for custom datasets)")
     
     models = {
         "1": "t5-small",
         "2": "sshleifer/distilbart-cnn-12-6",
-        "3": "facebook/bart-large-cnn"
+        "3": "facebook/bart-large-cnn",
+        "4": "google/pegasus-xsum",
+        "5": "mrm8488/t5-base-finetuned-summarize-news",
+        "6": "philschmid/bart-large-cnn-samsum",
+        "7": "Falconsai/medical_summarization",
+        "8": "KedarPanchal/flan-t5-small-summary-finetune",
+        "9": "csebuetnlp/mT5_multilingual_XLSum",
+        "10": "ainize/kobart-news",
+        "11": "google/t5-efficient-mini"
     }
     
     while True:
-        choice = input("Enter your choice (1, 2, or 3): ").strip()
+        choice = input("Enter your choice (1-11): ").strip()
         if choice in models:
             return models[choice]
         elif choice == "": # Default option
             return models["1"]
-        print("Invalid choice. Please enter 1, 2, or 3.")
+        print("Invalid choice. Please enter a number from 1 to 11.")
 
 # Check for GPU availability and set the device
 if torch.cuda.is_available():
@@ -366,7 +385,7 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
                     print(f"Moved and renamed: {file_path} -> {destination_path}")
                 except Exception as move_e:
                     print(f"Error moving original file: {move_e}")
-                
+            
         else:
             print("Step 8.1: Skipping file - unable to extract meaningful text.")
     
@@ -440,7 +459,9 @@ if __name__ == "__main__":
                 print("Invalid input. Please enter a valid number.")
 
         file_management_settings = {}
-        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip().lower()
+        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip
+
+().lower()
         
         if move_and_rename_choice in ['y', 'yes']:
             print("\n--- Define Global File Management Rules ---")
@@ -485,4 +506,3 @@ if __name__ == "__main__":
         print("\nProcess interrupted by user. Exiting gracefully.")
     except Exception as e:
         print(f"\nAn unexpected error occurred: {e}")
-
