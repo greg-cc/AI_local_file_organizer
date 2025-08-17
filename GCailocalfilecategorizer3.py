@@ -10,35 +10,7 @@ from transformers.pipelines.text_classification import TextClassificationPipelin
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import shutil
 import json
-
-# --- Custom Pipeline for Zero-Shot Classification with Threshold ---
-class ThresholdZeroShotClassificationPipeline(TextClassificationPipeline):
-    """
-    Custom pipeline for zero-shot classification that returns 'Other' if the top
-    score is below a specified threshold.
-    """
-    def __init__(self, *args, threshold=0.1, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.threshold = threshold
-
-    def __call__(self, sequences, *args, **kwargs):
-        # Run the standard zero-shot classification
-        results = super().__call__(sequences, *args, **kwargs)
-
-        # Process results to apply the threshold
-        processed_results = []
-        # The pipeline can return a single dict or a list of dicts
-        if isinstance(results, dict):
-            results = [results]
-
-        for result in results:
-            if result['scores'][0] >= self.threshold:
-                processed_results.append(result['labels'][0])
-            else:
-                processed_results.append("Other")
-
-        # Return a single string if only one sequence was passed, else a list of strings
-        return processed_results[0] if len(processed_results) == 1 else processed_results
+from collections import Counter
 
 # --- Model Selection Function ---
 def select_summarization_model():
@@ -110,48 +82,50 @@ def select_classifier_model():
     print("2: (440 MB) FacebookAI/roberta-large-mnli - Multi-genre natural language inference (Good for scientific fields)")
     print("3: (440 MB) amannor/bert-base-uncased-sdg-classifier - General purpose BERT model (Good for scientific fields)")
     print("4: (377 MB) HugoGiddins/multi-tag-classifier-debertav3-small-2 - Powerful multi-tag classifier (Good for scientific fields)")
-    print("5: (260 MB) openai-community/roberta-base-openai-detector - Detects AI-generated text")
-    print("6: (260 MB) bvanaken/clinical-assertion-negation-bert - Clinical assertion and negation detection (Good for scientific fields)")
-    print("7: (260 MB) Falconsai/intent_classification - General user intent classification")
-    print("8: (260 MB) TheBritishLibrary/bl-books-genre - Genre classification for books (Good for scientific fields)")
-    print("9: (260 MB) aloxatel/bert-base-mnli - Multi-genre natural language inference")
-    print("10: (260 MB) blackbird/bert-base-uncased-MNLI-v1 - Multi-genre natural language inference")
-    print("11: (86 MB) meta-llama/Llama-Prompt-Guard-2-86M - Specialized for prompt safety")
-    print("12: (86 MB) meta-llama/Prompt-Guard-86M - Lightweight prompt safety")
-    print("13: (20 MB) bioformers/bioformer-8L-qnli - Question-and-answer model for biomedical text (Good for scientific fields)")
-    print("14: (16 MB) bioformers/bioformer-8L-mnli - Multi-genre natural language inference for biomedical text (Good for scientific fields)")
-    print("15: (3 MB) celential/erc - General purpose conversational classification")
+    print("5: (268 MB) nori3tsu/classify-reservation-intent - Specialized for user intent")
+    print("6: (260 MB) openai-community/roberta-base-openai-detector - Detects AI-generated text")
+    print("7: (260 MB) bvanaken/clinical-assertion-negation-bert - Clinical assertion and negation detection (Good for scientific fields)")
+    print("8: (260 MB) Falconsai/intent_classification - General user intent classification")
+    print("9: (260 MB) TheBritishLibrary/bl-books-genre - Genre classification for books (Good for scientific fields)")
+    print("10: (260 MB) aditeyabaral/finetuned-iitp_pdt_review-additionalpretrained-bert-base-cased - Review classification")
+    print("11: (260 MB) aloxatel/bert-base-mnli - Multi-genre natural language inference")
+    print("12: (260 MB) blackbird/bert-base-uncased-MNLI-v1 - Multi-genre natural language inference")
+    print("13: (260 MB) bgoel4132/tweet-disaster-classifier - Disaster tweet classification")
+    print("14: (20 MB) bioformers/bioformer-8L-qnli - Question-and-answer model for biomedical text (Good for scientific fields)")
+    print("15: (16 MB) bioformers/bioformer-8L-mnli - Multi-genre natural language inference for biomedical text (Good for scientific fields)")
+    print("16: (3 MB) celential/erc - General purpose conversational classification")
 
     models = {
         "1": "openai-community/roberta-large-openai-detector",
         "2": "FacebookAI/roberta-large-mnli",
         "3": "amannor/bert-base-uncased-sdg-classifier",
         "4": "HugoGiddins/multi-tag-classifier-debertav3-small-2",
-        "5": "openai-community/roberta-base-openai-detector",
-        "6": "bvanaken/clinical-assertion-negation-bert",
-        "7": "Falconsai/intent_classification",
-        "8": "TheBritishLibrary/bl-books-genre",
-        "9": "aloxatel/bert-base-mnli",
-        "10": "blackbird/bert-base-uncased-MNLI-v1",
-        "11": "meta-llama/Llama-Prompt-Guard-2-86M",
-        "12": "meta-llama/Prompt-Guard-86M",
-        "13": "bioformers/bioformer-8L-qnli",
-        "14": "bioformers/bioformer-8L-mnli",
-        "15": "celential/erc"
+        "5": "nori3tsu/classify-reservation-intent",
+        "6": "openai-community/roberta-base-openai-detector",
+        "7": "bvanaken/clinical-assertion-negation-bert",
+        "8": "Falconsai/intent_classification",
+        "9": "TheBritishLibrary/bl-books-genre",
+        "10": "aditeyabaral/finetuned-iitp_pdt_review-additionalpretrained-bert-base-cased",
+        "11": "aloxatel/bert-base-mnli",
+        "12": "blackbird/bert-base-uncased-MNLI-v1",
+        "13": "bgoel4132/tweet-disaster-classifier",
+        "14": "bioformers/bioformer-8L-qnli",
+        "15": "bioformers/bioformer-8L-mnli",
+        "16": "celential/erc"
     }
     
     while True:
-        choice = input("Enter your choice (1-15): ").strip()
+        choice = input("Enter your choice (1-16): ").strip()
         if choice in models:
             return models[choice]
         elif choice == "": # Default option
             return models["1"]
-        print("Invalid choice. Please enter a number from 1 to 15.")
+        print("Invalid choice. Please enter a number from 1 to 16.")
 
 # --- NEW FUNCTION: Get Summary Lengths ---
 def get_summary_lengths():
     """
-    Prompts the user to set the min and max summary lengths.
+    Prompts the user to set the min and max summary lengths with validation.
     """
     min_len, max_len = 220, 400 # Default values
     
@@ -163,25 +137,20 @@ def get_summary_lengths():
             else:
                 min_len_to_use = int(min_input)
             
-            if min_len_to_use <= 0:
-                print("Please enter a number greater than 0.")
-                continue
-            break
-        except ValueError:
-            print("Invalid input. Please enter a valid number.")
-
-    while True:
-        try:
             max_input = input(f"Enter MAX summary length [default: {max_len}]: ").strip()
             if max_input == "":
                 max_len_to_use = max_len
             else:
                 max_len_to_use = int(max_input)
-
-            if max_len_to_use >= min_len_to_use:
+            
+            if min_len_to_use < max_len_to_use:
                 break
-            else:
-                print("Max length must be greater than or equal to the min length.")
+            elif min_len_to_use >= max_len_to_use:
+                print(f"Error: Min length ({min_len_to_use}) must be less than max length ({max_len_to_use}). Automatically adjusting max length to 
+
+{min_len_to_use + 50}.")
+                max_len_to_use = min_len_to_use + 50
+                break
         except ValueError:
             print("Invalid input. Please enter a valid number.")
             
@@ -244,8 +213,32 @@ else:
     print("GPU not found. Device set to use CPU.")
 
 # --- Configuration ---
+# The logic for chunking is now handled by the tokenizer, not this variable.
+# MAX_CHUNK_LENGTH is now a conceptual size for file reading only.
 MAX_CHUNK_LENGTH = 512
-# Summary lengths are now set dynamically
+
+# --- NEW FUNCTION: Get Download Directory ---
+def get_download_directory():
+    """
+    Prompts the user for a download directory and creates it if it doesn't exist.
+    """
+    default_path = os.path.join(os.getcwd(), "models_cache")
+    print(f"\nModel files can be large. By default, they are stored in a cache directory.")
+    print(f"Current working directory: {os.getcwd()}")
+    path_input = input(f"Enter a directory path to store model files [default: '{default_path}']: ").strip()
+
+    if path_input == "":
+        cache_dir = default_path
+    else:
+        cache_dir = path_input
+
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        print(f"Model download directory set to: {cache_dir}")
+        return cache_dir
+    except Exception as e:
+        print(f"Error creating directory: {e}. Falling back to default cache location.")
+        return None
 
 # --- Load and Edit Categories Function ---
 def load_and_edit_categories():
@@ -270,6 +263,7 @@ def load_and_edit_categories():
     except Exception as e:
         print(f"Error loading categories file: {e}. Using default categories.")
 
+    # Display the current categories list here, before the 'edit' prompt
     print("\n--- Current Categories ---")
     for i, cat in enumerate(categories):
         print(f"[{i+1}] {cat}")
@@ -277,8 +271,13 @@ def load_and_edit_categories():
     
     edit_choice = input("Do you want to edit these categories? (y/n) [default: no]: ").strip().lower()
     if edit_choice in ['y', 'yes']:
-        print("\nEditing categories. Enter 'add <new_category>', 'remove <number>', 'edit <number> <new_category>', 'list', or 'done' to finish.")
         while True:
+            print("\n--- Current Categories ---")
+            for i, cat in enumerate(categories):
+                print(f"[{i+1}] {cat}")
+            print("--------------------------")
+            print("\nEditing categories. Enter 'add <new_category>', 'remove <number>', 'edit <number> <new_category>', 'list', or 'done' to finish.")
+
             command = input("> ").strip()
             if command.lower() == 'done':
                 break
@@ -309,88 +308,88 @@ def load_and_edit_categories():
                 else:
                     print("Invalid category number.")
             elif action == 'list':
-                pass # The list will be printed below
+                pass # The list will be printed by the loop's design
             else:
                 print("Invalid command. Please try again.")
-
-            print("\n--- Current Categories ---")
-            for i, cat in enumerate(categories):
-                print(f"[{i+1}] {cat}")
-            print("--------------------------")
         
     # Save the final list of categories
     with open(category_file, 'w', encoding='utf-8') as f:
         json.dump(categories, f, indent=4)
     print("\nStep 1.3: Categories saved for next session.")
-    
+        
     return categories
 
+# --- Tokenizer and Chunking Function ---
+def chunk_text_by_tokens(text, tokenizer, max_length):
+    """
+    Splits text into token-based chunks to prevent the model from failing on long sequences.
+    """
+    chunks = []
+    
+    # Tokenize the entire text
+    tokenized_text = tokenizer.tokenize(text)
+    
+    # Split the tokenized text into chunks of max_length
+    for i in range(0, len(tokenized_text), max_length):
+        chunk = tokenized_text[i:i + max_length]
+        
+        # Detokenize the chunk to get the original text
+        detokenized_chunk = tokenizer.convert_tokens_to_string(chunk)
+        chunks.append(detokenized_chunk)
+    
+    return chunks
+
 # --- File Reading Functions ---
-def read_pdf(file_path, start_chunk, end_chunk):
-    """Extracts text from a PDF file within a specified word-chunk range."""
+def read_pdf(file_path):
+    """Extracts all text from a PDF file."""
     text = ""
     try:
-        full_text = ""
         with fitz.open(file_path) as pdf:
             for page in pdf:
-                full_text += page.get_text()
-        
-        words = full_text.split()
-        start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
-        end_index = end_chunk * MAX_CHUNK_LENGTH
-        # Ensure we don't go out of bounds
-        end_index = min(end_index, len(words))
-        
-        text = " ".join(words[start_index:end_index])
+                text += page.get_text()
     except Exception as e:
         print(f"Error reading PDF: {e}")
     return text
 
-def read_docx(file_path, start_chunk, end_chunk):
-    """Extracts text from a DOCX file within a specified chunk range."""
+def read_docx(file_path):
+    """Extracts all text from a DOCX file."""
     text = ""
     try:
         doc = Document(file_path)
-        full_text = "\n".join([para.text for para in doc.paragraphs])
-        words = full_text.split()
-        start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
-        end_index = end_chunk * MAX_CHUNK_LENGTH
-        text = " ".join(words[start_index:end_index])
+        text = "\n".join([para.text for para in doc.paragraphs])
     except Exception as e:
         print(f"Error reading DOCX: {e}")
     return text
 
-def read_txt(file_path, start_chunk, end_chunk):
-    """Reads text from a plain TXT file within a specified chunk range."""
+def read_txt(file_path):
+    """Reads all text from a plain TXT file with improved encoding handling."""
     text = ""
     try:
         with open(file_path, "r", encoding="utf-8") as file:
-            words = file.read().split()
-            start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
-            end_index = end_chunk * MAX_CHUNK_LENGTH
-            text = " ".join(words[start_index:end_index])
+            text = file.read()
+    except UnicodeDecodeError:
+        print("UTF-8 decode failed. Falling back to latin-1 encoding.")
+        with open(file_path, "r", encoding="latin-1", errors='replace') as file:
+            text = file.read()
     except Exception as e:
         print(f"Error reading TXT: {e}")
     return text
 
-def read_excel(file_path, start_chunk, end_chunk):
-    """Extracts text from an XLSX (Excel) file within a specified chunk range."""
+def read_excel(file_path):
+    """Extracts all text from an XLSX (Excel) file."""
     text = ""
     try:
         df = pd.read_excel(file_path, sheet_name=None)
         full_text = ""
         for sheet_name in df:
             full_text += df[sheet_name].to_string(index=False) + "\n"
-        words = full_text.split()
-        start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
-        end_index = end_chunk * MAX_CHUNK_LENGTH
-        text = " ".join(words[start_index:end_index])
+        text = full_text
     except Exception as e:
         print(f"Error reading XLSX: {e}")
     return text
 
-def read_pptx(file_path, start_chunk, end_chunk):
-    """Extracts text from a PPTX (PowerPoint) file within a specified chunk range."""
+def read_pptx(file_path):
+    """Extracts all text from a PPTX (PowerPoint) file."""
     text = ""
     try:
         presentation = Presentation(file_path)
@@ -399,10 +398,7 @@ def read_pptx(file_path, start_chunk, end_chunk):
             for shape in slide.shapes:
                 if shape.has_text_frame:
                     full_text += shape.text + "\n"
-        words = full_text.split()
-        start_index = (start_chunk - 1) * MAX_CHUNK_LENGTH
-        end_index = end_chunk * MAX_CHUNK_LENGTH
-        text = " ".join(words[start_index:end_index])
+        text = full_text
     except Exception as e:
         print(f"Error reading PPTX: {e}")
     return text
@@ -415,8 +411,8 @@ def summarize_text(text, summarizer_pipeline, min_len, max_len):
     if not text.strip():
         return ["No text to summarize."]
 
-    words = text.split()
-    chunks = [" ".join(words[i:i + MAX_CHUNK_LENGTH]) for i in range(0, len(words), MAX_CHUNK_LENGTH)]
+    # Use the pipeline's tokenizer for chunking to avoid token size issues
+    chunks = chunk_text_by_tokens(text, summarizer_pipeline.tokenizer, summarizer_pipeline.model.config.max_length)
     
     summaries = []
     
@@ -424,7 +420,7 @@ def summarize_text(text, summarizer_pipeline, min_len, max_len):
     try:
         results = summarizer_pipeline(
             chunks, 
-            max_length=max_len, 
+            max_new_tokens=max_len, 
             min_length=min_len, 
             truncation=True,
             batch_size=8
@@ -436,7 +432,7 @@ def summarize_text(text, summarizer_pipeline, min_len, max_len):
         for i, chunk in enumerate(chunks):
             try:
                 summary = summarizer_pipeline(
-                    chunk, max_length=max_len, min_length=min_len, truncation=True
+                    chunk, max_new_tokens=max_len, min_length=min_len, truncation=True
                 )
                 summaries.append(summary[0]['summary_text'])
             except Exception as chunk_e:
@@ -447,21 +443,41 @@ def summarize_text(text, summarizer_pipeline, min_len, max_len):
     return [s.strip() for s in combined_summary.split(".") if s.strip()]
     
 # --- Categorization Function ---
-def categorize_summary(summary_text, categories, classifier_pipeline):
-    """Categorizes a summary using a zero-shot classification model with a built-in threshold."""
+def categorize_summary(summary_text, categories, classifier_pipeline, threshold):
+    """Categorizes a summary by chunking it and returning the most common label."""
     if classifier_pipeline is None:
         return "Other"
 
     print("Step 7.1.1: Sending summary to classifier model...")
+    
     try:
-        category = classifier_pipeline(summary_text, candidate_labels=categories)
-        return category
+        # Use the classifier's tokenizer to create chunks from the summary
+        classifier_max_length = classifier_pipeline.model.config.max_length
+        chunks = chunk_text_by_tokens(summary_text, classifier_pipeline.tokenizer, classifier_max_length)
+        
+        # Classify each chunk
+        chunk_results = []
+        for chunk in chunks:
+            result = classifier_pipeline(chunk, candidate_labels=categories)
+            if result['scores'][0] >= threshold:
+                chunk_results.append(result['labels'][0])
+        
+        # If no chunks were classified above the threshold, return "Other"
+        if not chunk_results:
+            return "Other"
+        
+        # Find the most common category among the classified chunks
+        most_common_category = Counter(chunk_results).most_common(1)[0][0]
+        return most_common_category
+    
     except Exception as e:
         print(f"Step 7.1.3: Error during AI categorization: {e}")
         return "Other"
 
 # --- Main Processing Logic ---
-def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer, classifier, min_len, max_len):
+def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer, classifier, 
+
+min_len, max_len, classifier_threshold_to_use):
     """
     Walks a folder, processes supported files, and generates summaries.
     """
@@ -499,18 +515,33 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
 
     for i, file_path in enumerate(file_list):
         print(f"\nStep 5: Processing file {i + 1}/{len(file_list)} - {os.path.basename(file_path)}")
+        
+        # Read the full text first
         reader = supported_extensions[os.path.splitext(file_path)[1].lower()]
+        full_text = reader(file_path)
 
-        print(f"Step 6: Extracting text from chunks {start_chunk} to {end_chunk}...")
-        text = reader(file_path, start_chunk, end_chunk)
+        if full_text.strip():
+            # Get the chunks based on the requested range
+            # The model's tokenizer is used to get the appropriate chunk length.
+            model_max_length = summarizer.model.config.max_length if hasattr(summarizer.model.config, 'max_length') else 512
+            all_chunks = chunk_text_by_tokens(full_text, summarizer.tokenizer, model_max_length)
+            
+            # Select the specific chunks the user requested
+            selected_chunks = all_chunks[start_chunk-1:end_chunk]
 
-        if text.strip():
+            if not selected_chunks:
+                print(f"Warning: No text found in chunks {start_chunk} to {end_chunk}. Skipping file.")
+                continue
+
+            print(f"Step 6: Extracting text from chunks {start_chunk} to {end_chunk}...")
+            text_to_summarize = " ".join(selected_chunks)
+
             print("Step 7: Text extracted successfully. Starting summarization...")
-            bullet_points = summarize_text(text, summarizer, min_len, max_len)
+            bullet_points = summarize_text(text_to_summarize, summarizer, min_len, max_len)
             
             summary_text = " ".join(bullet_points)
             print("Step 7.1: Categorizing summary...")
-            category = categorize_summary(summary_text, categories, classifier)
+            category = categorize_summary(summary_text, categories, classifier, classifier_threshold_to_use)
 
             print("Step 8: Final summary complete.")
             
@@ -555,39 +586,44 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
 # --- Main Execution ---
 if __name__ == "__main__":
     try:
+        # Step 0: Get the download directory for models
+        cache_directory = get_download_directory()
+
         # Question 1: Select the summarization model
         summarizer_model_name = select_summarization_model()
 
-        # Question 2: Set the classifier threshold for the selected model
-        classifier_threshold_to_use = get_classifier_threshold(summarizer_model_name)
-        
-        # Question 3: Set summary lengths
-        min_summary_length, max_summary_length = get_summary_lengths()
-        
-        # Question 4: Ask if user wants to select a different classifier
+        # Question 2: Ask if user wants to select a different classifier
         classifier_model_name = "MoritzLaurer/xtremedistil-l6-h256-mnli-fever-anli-ling-binary"
         classifier_choice = input("\nDo you want to select a different classifier model? (y/n) [default: n]: ").strip().lower()
         if classifier_choice in ['y', 'yes']:
             classifier_model_name = select_classifier_model()
+        
+        # Question 3: Set the classifier threshold for the selected model
+        classifier_threshold_to_use = get_classifier_threshold(classifier_model_name)
+        
+        # Question 4: Set summary lengths
+        min_summary_length, max_summary_length = get_summary_lengths()
 
 
         # --- Load Models ---
         print(f"\nStep 1: Loading summarization model ({summarizer_model_name}) and classification model...")
         print("If this is the first time you are running the script, a large file download will begin now. Please wait for it to complete.")
+        print("Note: If the script appears unresponsive during this step, it is likely downloading a large file. Forcing a stop with Ctrl+C may not be 
 
-        # FIXED: Reverted to simpler loading without token logic
+immediate during these operations.")
+
         try:
             print("Step 1a: Explicitly loading tokenizer...")
-            tokenizer = AutoTokenizer.from_pretrained(summarizer_model_name)
+            summarizer_tokenizer = AutoTokenizer.from_pretrained(summarizer_model_name, cache_dir=cache_directory)
             
             print("Step 1b: Explicitly loading model...")
-            model = AutoModelForSeq2SeqLM.from_pretrained(summarizer_model_name).to(device)
+            summarizer_model = AutoModelForSeq2SeqLM.from_pretrained(summarizer_model_name, cache_dir=cache_directory).to(device)
             
             print("Step 1c: Creating summarization pipeline...")
-            summarizer = pipeline(
+            summarizer_pipeline = pipeline(
                 "summarization",
-                model=model,
-                tokenizer=tokenizer,
+                model=summarizer_model,
+                tokenizer=summarizer_tokenizer,
                 device=0 if device == 'cuda' else -1,
                 framework="pt"
             )
@@ -598,18 +634,16 @@ if __name__ == "__main__":
             exit()
 
         try:
-            classifier = pipeline(
+            classifier_pipeline = pipeline(
                 task="zero-shot-classification",
                 model=classifier_model_name,
                 device=device,
-                pipeline_class=ThresholdZeroShotClassificationPipeline,
-                # Use the user-defined threshold
-                threshold=classifier_threshold_to_use
+                cache_dir=cache_directory
             )
             print(f"Step 1.1: Classification model ({os.path.basename(classifier_model_name)}) loaded successfully with custom threshold.")
         except Exception as e:
             print(f"Error loading classification model: {e}")
-            classifier = None
+            classifier_pipeline = None
             print("Step 1.1: Falling back to 'Other' for all classifications.")
 
         CATEGORIES = load_and_edit_categories()
@@ -646,7 +680,9 @@ if __name__ == "__main__":
                 print("Invalid input. Please enter a valid number.")
 
         file_management_settings = {}
-        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip().lower()
+        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip
+
+().lower()
         
         if move_and_rename_choice in ['y', 'yes']:
             print("\n--- Define Global File Management Rules ---")
@@ -671,10 +707,11 @@ if __name__ == "__main__":
             start_chunk_to_use, 
             end_chunk_to_use, 
             file_management_settings,
-            summarizer,
-            classifier,
+            summarizer_pipeline,
+            classifier_pipeline,
             min_summary_length,
-            max_summary_length
+            max_summary_length,
+            classifier_threshold_to_use
         )
 
         if all_summaries:
