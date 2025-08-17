@@ -5,18 +5,22 @@ import pandas as pd
 from pptx import Presentation
 from transformers import pipeline
 import torch
-from transformers.pipelines.text_classification import TextClassificationPipeline
-# NEW CODE: Added imports for explicit model and tokenizer loading
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 import shutil
 import json
 from collections import Counter
 
 # --- Model Selection Function ---
-def select_summarization_model():
+def select_summarization_model(last_model=None):
     """
     Prompts the user to select a summarization model from a list of options.
+    Optionally offers the last-used model.
     """
+    if last_model:
+        choice = input(f"Use last summarization model '{last_model}'? (y/n) [default: y]: ").strip().lower()
+        if choice in ['y', 'yes', '']:
+            return last_model
+    
     print("\nPlease select a summarization model to use:")
     print("--- Models Sorted by Size (Largest to Smallest) ---")
     print("1: (2440 MB) facebook/mbart-large-cc25 - Compact multilingual")
@@ -72,10 +76,16 @@ def select_summarization_model():
         print("Invalid choice. Please enter a number from 1 to 20.")
 
 # --- NEW FUNCTION: Classifier Model Selection ---
-def select_classifier_model():
+def select_classifier_model(last_model=None):
     """
     Prompts the user to select a classifier model from a list of options.
+    Optionally offers the last-used model.
     """
+    if last_model:
+        choice = input(f"Use last classifier model '{last_model}'? (y/n) [default: y]: ").strip().lower()
+        if choice in ['y', 'yes', '']:
+            return last_model
+    
     print("\nPlease select a classifier model:")
     print("--- Models Sorted by Size (Largest to Smallest) ---")
     print("1: (440 MB) openai-community/roberta-large-openai-detector - Detects AI-generated text")
@@ -127,7 +137,7 @@ def get_summary_lengths():
     """
     Prompts the user to set the min and max summary lengths with validation.
     """
-    min_len, max_len = 220, 400 # Default values
+    min_len, max_len = 30, 70 # Default values
     
     while True:
         try:
@@ -143,14 +153,12 @@ def get_summary_lengths():
             else:
                 max_len_to_use = int(max_input)
             
-            if min_len_to_use < max_len_to_use:
-                break
-            elif min_len_to_use >= max_len_to_use:
-                print(f"Error: Min length ({min_len_to_use}) must be less than max length ({max_len_to_use}). Automatically adjusting max length to 
-
-{min_len_to_use + 50}.")
+            # Ensure max_length is always greater than min_length
+            if max_len_to_use < min_len_to_use:
+                print(f"Error: Max length ({max_len_to_use}) must be greater than min length ({min_len_to_use}). Automatically adjusting max length to {min_len_to_use + 50}.")
                 max_len_to_use = min_len_to_use + 50
-                break
+
+            break
         except ValueError:
             print("Invalid input. Please enter a valid number.")
             
@@ -204,6 +212,37 @@ def get_classifier_threshold(model_name):
         
     return chosen_threshold
 
+# --- NEW FUNCTION: Save Last Used Models ---
+def save_last_models(summarizer_model_name, classifier_model_name):
+    """
+    Saves the last used model names to a file.
+    """
+    settings_file = "last_models.json"
+    data = {
+        "summarizer_model": summarizer_model_name,
+        "classifier_model": classifier_model_name
+    }
+    try:
+        with open(settings_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=4)
+    except Exception as e:
+        print(f"Warning: Could not save last model settings: {e}")
+
+# --- NEW FUNCTION: Load Last Used Models ---
+def load_last_models():
+    """
+    Loads the last used model names from a file.
+    """
+    settings_file = "last_models.json"
+    try:
+        if os.path.exists(settings_file):
+            with open(settings_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get("summarizer_model"), data.get("classifier_model")
+    except Exception as e:
+        print(f"Warning: Could not load last model settings file: {e}")
+    return None, None
+
 # Check for GPU availability and set the device
 if torch.cuda.is_available():
     device = "cuda"
@@ -239,6 +278,26 @@ def get_download_directory():
     except Exception as e:
         print(f"Error creating directory: {e}. Falling back to default cache location.")
         return None
+
+# --- Get Token Chunk Size Function ---
+def get_token_chunk_size():
+    """
+    Prompts the user to set the token chunk size for models.
+    """
+    default_chunk_size = 140
+    while True:
+        try:
+            user_input = input(f"Enter the maximum token chunk size for models [default: {default_chunk_size}]: ").strip()
+            if user_input == "":
+                return default_chunk_size
+            else:
+                size = int(user_input)
+                if size > 0:
+                    return size
+                else:
+                    print("Error: Please enter a number greater than 0.")
+        except ValueError:
+            print("Error: Invalid input. Please enter a valid number.")
 
 # --- Load and Edit Categories Function ---
 def load_and_edit_categories():
@@ -404,7 +463,7 @@ def read_pptx(file_path):
     return text
 
 # --- Summarization Function ---
-def summarize_text(text, summarizer_pipeline, min_len, max_len):
+def summarize_text(text, summarizer_pipeline, min_len, max_len, chunk_size):
     """
     Generates a summary from the text using the provided summarizer pipeline.
     """
@@ -412,7 +471,7 @@ def summarize_text(text, summarizer_pipeline, min_len, max_len):
         return ["No text to summarize."]
 
     # Use the pipeline's tokenizer for chunking to avoid token size issues
-    chunks = chunk_text_by_tokens(text, summarizer_pipeline.tokenizer, summarizer_pipeline.model.config.max_length)
+    chunks = chunk_text_by_tokens(text, summarizer_pipeline.tokenizer, chunk_size)
     
     summaries = []
     
@@ -443,7 +502,7 @@ def summarize_text(text, summarizer_pipeline, min_len, max_len):
     return [s.strip() for s in combined_summary.split(".") if s.strip()]
     
 # --- Categorization Function ---
-def categorize_summary(summary_text, categories, classifier_pipeline, threshold):
+def categorize_summary(summary_text, categories, classifier_pipeline, threshold, chunk_size):
     """Categorizes a summary by chunking it and returning the most common label."""
     if classifier_pipeline is None:
         return "Other"
@@ -452,8 +511,7 @@ def categorize_summary(summary_text, categories, classifier_pipeline, threshold)
     
     try:
         # Use the classifier's tokenizer to create chunks from the summary
-        classifier_max_length = classifier_pipeline.model.config.max_length
-        chunks = chunk_text_by_tokens(summary_text, classifier_pipeline.tokenizer, classifier_max_length)
+        chunks = chunk_text_by_tokens(summary_text, classifier_pipeline.tokenizer, chunk_size)
         
         # Classify each chunk
         chunk_results = []
@@ -475,9 +533,7 @@ def categorize_summary(summary_text, categories, classifier_pipeline, threshold)
         return "Other"
 
 # --- Main Processing Logic ---
-def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer, classifier, 
-
-min_len, max_len, classifier_threshold_to_use):
+def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer_pipeline, classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_size, color_code):
     """
     Walks a folder, processes supported files, and generates summaries.
     """
@@ -512,6 +568,12 @@ min_len, max_len, classifier_threshold_to_use):
     print(f"Step 4: Found {len(file_list)} supported files. Processing them now...")
 
     all_summaries = []
+    
+    # ANSI escape codes for formatting
+    BOLD_START = "\033[1m"
+    BOLD_END = "\033[0m"
+    COLOR_START = color_code
+    COLOR_END = "\033[0m"
 
     for i, file_path in enumerate(file_list):
         print(f"\nStep 5: Processing file {i + 1}/{len(file_list)} - {os.path.basename(file_path)}")
@@ -522,9 +584,7 @@ min_len, max_len, classifier_threshold_to_use):
 
         if full_text.strip():
             # Get the chunks based on the requested range
-            # The model's tokenizer is used to get the appropriate chunk length.
-            model_max_length = summarizer.model.config.max_length if hasattr(summarizer.model.config, 'max_length') else 512
-            all_chunks = chunk_text_by_tokens(full_text, summarizer.tokenizer, model_max_length)
+            all_chunks = chunk_text_by_tokens(full_text, summarizer_pipeline.tokenizer, token_chunk_size)
             
             # Select the specific chunks the user requested
             selected_chunks = all_chunks[start_chunk-1:end_chunk]
@@ -537,21 +597,38 @@ min_len, max_len, classifier_threshold_to_use):
             text_to_summarize = " ".join(selected_chunks)
 
             print("Step 7: Text extracted successfully. Starting summarization...")
-            bullet_points = summarize_text(text_to_summarize, summarizer, min_len, max_len)
+            bullet_points = summarize_text(text_to_summarize, summarizer_pipeline, min_len, max_len, token_chunk_size)
             
             summary_text = " ".join(bullet_points)
             print("Step 7.1: Categorizing summary...")
-            category = categorize_summary(summary_text, categories, classifier, classifier_threshold_to_use)
+            category = categorize_summary(summary_text, categories, classifier_pipeline, classifier_threshold_to_use, token_chunk_size)
 
             print("Step 8: Final summary complete.")
             
             print(f"\nFile: {file_path}\nCategory: {category}\nSummary:\n")
-            summary_text_for_file = ""
-            for point in bullet_points:
-                print(f"- {point}")
-                summary_text_for_file += f"- {point}\n"
+
+            # Bold and colorize the matching category text in the summary for display
+            display_summary = summary_text
+            for cat in categories:
+                if cat.lower() in display_summary.lower():
+                    start_index = 0
+                    while True:
+                        start_index = display_summary.lower().find(cat.lower(), start_index)
+                        if start_index == -1:
+                            break
+                        end_index = start_index + len(cat)
+                        original_text = display_summary[start_index:end_index]
+                        display_summary = display_summary[:start_index] + COLOR_START + BOLD_START + original_text + COLOR_END + BOLD_END + display_summary[end_index:]
+                        start_index += len(COLOR_START) + len(BOLD_START) + len(COLOR_END) + len(BOLD_END) + len(cat)
+            
+            # Print the formatted summary
+            print(display_summary)
             print("\n" + "-"*50)
 
+            summary_text_for_file = ""
+            for point in bullet_points:
+                summary_text_for_file += f"- {point}\n"
+            
             all_summaries.append({
                 'file_path': os.path.abspath(file_path),
                 'category': category,
@@ -582,35 +659,69 @@ min_len, max_len, classifier_threshold_to_use):
     print("\n--- Step 9: All supported files processed ---")
     return all_summaries
 
+# --- Get Color Choice Function ---
+def get_color_choice():
+    """
+    Prompts the user for a color choice and returns the corresponding ANSI code.
+    """
+    color_map = {
+        'red': "\033[91m",
+        'green': "\033[92m",
+        'yellow': "\033[93m",
+        'blue': "\033[94m",
+        'magenta': "\033[95m",
+        'cyan': "\033[96m"
+    }
+
+    print("\nChoose a color for bolded text:")
+    for color in color_map:
+        print(f"- {color}")
+    
+    choice = input("Enter your choice [default: yellow]: ").strip().lower()
+    return color_map.get(choice, color_map['yellow'])
+
 
 # --- Main Execution ---
 if __name__ == "__main__":
     try:
-        # Step 0: Get the download directory for models
+        # Load last used models if they exist
+        last_summarizer_model, last_classifier_model = load_last_models()
+
+        # Step 0: Get the download directory for models and color choice
         cache_directory = get_download_directory()
+        color_code = get_color_choice()
 
         # Question 1: Select the summarization model
-        summarizer_model_name = select_summarization_model()
+        summarizer_model_name = select_summarization_model(last_summarizer_model)
 
         # Question 2: Ask if user wants to select a different classifier
         classifier_model_name = "MoritzLaurer/xtremedistil-l6-h256-mnli-fever-anli-ling-binary"
-        classifier_choice = input("\nDo you want to select a different classifier model? (y/n) [default: n]: ").strip().lower()
+        classifier_choice = input(f"\nDo you want to select a different classifier model? (y/n) [default: n]: ").strip().lower()
         if classifier_choice in ['y', 'yes']:
-            classifier_model_name = select_classifier_model()
+            classifier_model_name = select_classifier_model(last_classifier_model)
+        else:
+            # If the user chose not to select a new model, and we have a last one, use it.
+            if last_classifier_model:
+                classifier_model_name = last_classifier_model
         
         # Question 3: Set the classifier threshold for the selected model
         classifier_threshold_to_use = get_classifier_threshold(classifier_model_name)
         
         # Question 4: Set summary lengths
         min_summary_length, max_summary_length = get_summary_lengths()
+        
+        # Question 5: Set the max token chunk size
+        token_chunk_size = get_token_chunk_size()
+
+
+        # --- Save last models for next run ---
+        save_last_models(summarizer_model_name, classifier_model_name)
 
 
         # --- Load Models ---
         print(f"\nStep 1: Loading summarization model ({summarizer_model_name}) and classification model...")
         print("If this is the first time you are running the script, a large file download will begin now. Please wait for it to complete.")
-        print("Note: If the script appears unresponsive during this step, it is likely downloading a large file. Forcing a stop with Ctrl+C may not be 
-
-immediate during these operations.")
+        print("Note: If the script appears unresponsive during this step, it is likely downloading a large file. Forcing a stop with Ctrl+C may not be immediate during these operations.")
 
         try:
             print("Step 1a: Explicitly loading tokenizer...")
@@ -680,9 +791,7 @@ immediate during these operations.")
                 print("Invalid input. Please enter a valid number.")
 
         file_management_settings = {}
-        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip
-
-().lower()
+        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip().lower()
         
         if move_and_rename_choice in ['y', 'yes']:
             print("\n--- Define Global File Management Rules ---")
@@ -711,7 +820,9 @@ immediate during these operations.")
             classifier_pipeline,
             min_summary_length,
             max_summary_length,
-            classifier_threshold_to_use
+            classifier_threshold_to_use,
+            token_chunk_size,
+            color_code
         )
 
         if all_summaries:
