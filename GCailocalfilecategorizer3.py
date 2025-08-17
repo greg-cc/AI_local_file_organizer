@@ -8,8 +8,6 @@ import torch
 from transformers.pipelines.text_classification import TextClassificationPipeline
 # NEW CODE: Added imports for explicit model and tokenizer loading
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-# NEW CODE: Added import for Hugging Face Hub login
-from huggingface_hub import login
 import shutil
 import json
 
@@ -52,66 +50,76 @@ def select_summarization_model():
     print("1: (242 MB) t5-small - Balanced speed and quality (Default)")
     print("2: (496 MB) sshleifer/distilbart-cnn-12-6 - Faster, distilled model for speed")
     print("3: (1630 MB) facebook/bart-large-cnn - Larger, higher quality model (Slower)")
+    print("\n--- Lightweight & Tiny Models (< 300 MB) ---")
+    print("4: (125 MB) google/t5-efficient-mini - Most resource-efficient")
+    print("5: (125 MB) google/t5-efficient-mini-xsum - Tuned for headline summaries")
+    print("6: (125 MB) google/t5-efficient-mini-cnndm - Tuned for news")
+    print("7: (125 MB) google/t5-efficient-mini-samsum - Tuned for dialogue")
+    print("8: (134 MB) Aryan0310/bert-mini2bert-mini-finetuned-cnn_daily_mail-summarization-finetuned-xsum - Tuned for news/headlines")
+    print("9: (242 MB) moussaKam/t5-small-finetuned-xsum - General purpose, reliable")
+    print("10: (242 MB) DivyanshuSheth/T5-Seq2Seq-Final - General purpose (T5-small)")
+    print("11: (242 MB) Shahm/t5-small-german - Specialized for German text")
+    print("12: (242 MB) efederici/text2tags - For generating tags/keywords")
     print("\n--- Specialized Models ---")
-    print("4: (2280 MB) google/pegasus-xsum - Headline-style summaries")
-    print("5: (892 MB) mrm8488/t5-base-finetuned-summarize-news - Specialized for news articles")
-    print("6: (1630 MB) philschmid/bart-large-cnn-samsum - Specialized for conversations/dialogue")
-    print("7: (242 MB) Falconsai/medical_summarization - High-performing for medical text")
-    print("8: (990 MB) google/flan-t5-base - Excellent for complex text & instructions")
-    print("\n--- Lightweight & Distilled ---")
-    print("9: (242 MB) Falconsai/text_summarization - Lightweight & efficient")
-    print("10: (460 MB) sshleifer/distilbart-cnn-6-6 - Smaller DistilBART")
-    print("11: (2440 MB) facebook/mbart-large-cc25 - Compact multilingual")
-    print("12: (268 MB) distilbert-base-uncased-finetuned-sst-2-english - Tiny, for extractive tasks")
-    print("\n--- Multilingual & Resource-Efficient Models ---")
-    print("13: (2330 MB) csebuetnlp/mT5_multilingual_XLSum - Summarizes in 44 languages")
-    print("14: (496 MB) ainize/kobart-news - Specialized for Korean news")
-    print("15: (125 MB) google/t5-efficient-mini - Resource-efficient for custom datasets")
+    print("13: (2280 MB) google/pegasus-xsum - Headline-style summaries")
+    print("14: (892 MB) mrm8488/t5-base-finetuned-summarize-news - Specialized for news articles")
+    print("15: (1630 MB) philschmid/bart-large-cnn-samsum - Specialized for conversations/dialogue")
+    print("16: (242 MB) Falconsai/medical_summarization - High-performing for medical text")
+    print("17: (990 MB) google/flan-t5-base - Excellent for complex text & instructions")
+    print("\n--- Multilingual Models ---")
+    print("18: (2440 MB) facebook/mbart-large-cc25 - Compact multilingual")
+    print("19: (2330 MB) csebuetnlp/mT5_multilingual_XLSum - Summarizes in 44 languages")
+    print("20: (496 MB) ainize/kobart-news - Specialized for Korean news")
     
     models = {
         "1": "t5-small",
         "2": "sshleifer/distilbart-cnn-12-6",
         "3": "facebook/bart-large-cnn",
-        "4": "google/pegasus-xsum",
-        "5": "mrm8488/t5-base-finetuned-summarize-news",
-        "6": "philschmid/bart-large-cnn-samsum",
-        "7": "Falconsai/medical_summarization",
-        "8": "google/flan-t5-base",
-        "9": "Falconsai/text_summarization",
-        "10": "sshleifer/distilbart-cnn-6-6",
-        "11": "facebook/mbart-large-cc25",
-        "12": "distilbert-base-uncased-finetuned-sst-2-english",
-        "13": "csebuetnlp/mT5_multilingual_XLSum",
-        "14": "ainize/kobart-news",
-        "15": "google/t5-efficient-mini"
+        "4": "google/t5-efficient-mini",
+        "5": "google/t5-efficient-mini-xsum",
+        "6": "google/t5-efficient-mini-cnndm",
+        "7": "google/t5-efficient-mini-samsum",
+        "8": "Aryan0310/bert-mini2bert-mini-finetuned-cnn_daily_mail-summarization-finetuned-xsum",
+        "9": "moussaKam/t5-small-finetuned-xsum",
+        "10": "DivyanshuSheth/T5-Seq2Seq-Final",
+        "11": "Shahm/t5-small-german",
+        "12": "efederici/text2tags",
+        "13": "google/pegasus-xsum",
+        "14": "mrm8488/t5-base-finetuned-summarize-news",
+        "15": "philschmid/bart-large-cnn-samsum",
+        "16": "Falconsai/medical_summarization",
+        "17": "google/flan-t5-base",
+        "18": "facebook/mbart-large-cc25",
+        "19": "csebuetnlp/mT5_multilingual_XLSum",
+        "20": "ainize/kobart-news"
     }
     
     while True:
-        choice = input("Enter your choice (1-15): ").strip()
+        choice = input("Enter your choice (1-20): ").strip()
         if choice in models:
             return models[choice]
         elif choice == "": # Default option
             return models["1"]
-        print("Invalid choice. Please enter a number from 1 to 15.")
+        print("Invalid choice. Please enter a number from 1 to 20.")
 
-# --- NEW FUNCTION: Tiny Model Selection ---
-def select_tiny_model():
+# --- NEW FUNCTION: Classifier Model Selection ---
+def select_classifier_model():
     """
-    Prompts the user to select a tiny summarization model.
+    Prompts the user to select a classifier model from a list of options.
     """
-    print("\nPlease select a tiny summarization model:")
-    print("1: (242 MB) moussaKam/t5-small-finetuned-xsum - General purpose, reliable")
-    print("2: (242 MB) henryu-lin/t5-small-samsum-deepspeed - Tuned for dialogue")
-    print("3: (268 MB) distilbert-base-uncased-finetuned-sst-2-english - Tiny, for extractive tasks")
-    print("4: (125 MB) google/t5-efficient-mini - Most resource-efficient")
-    print("5: (242 MB) Vamsi/T5_Paraphrase_Paws - Specialized in paraphrasing")
-    
+    print("\nPlease select a classifier model:")
+    print("1: (135 MB) MoritzLaurer/xtremedistil-l6-h256-mnli-fever-anli-ling-binary - Fast & efficient (Default)")
+    print("2: (377 MB) HugoGiddins/multi-tag-classifier-debertav3-small-2 - Powerful multi-tag classifier")
+    print("3: (440 MB) amannor/bert-base-uncased-sdg-classifier - General purpose BERT model")
+    print("4: (268 MB) Frankhihi/fast-emotion-classifier - Specialized for emotion detection")
+    print("5: (268 MB) nori3tsu/classify-reservation-intent - Specialized for user intent")
+
     models = {
-        "1": "moussaKam/t5-small-finetuned-xsum",
-        "2": "henryu-lin/t5-small-samsum-deepspeed",
-        "3": "distilbert-base-uncased-finetuned-sst-2-english",
-        "4": "google/t5-efficient-mini",
-        "5": "Vamsi/T5_Paraphrase_Paws"
+        "1": "MoritzLaurer/xtremedistil-l6-h256-mnli-fever-anli-ling-binary",
+        "2": "HugoGiddins/multi-tag-classifier-debertav3-small-2",
+        "3": "amannor/bert-base-uncased-sdg-classifier",
+        "4": "Frankhihi/fast-emotion-classifier",
+        "5": "nori3tsu/classify-reservation-intent"
     }
 
     while True:
@@ -435,9 +443,7 @@ def categorize_summary(summary_text, categories, classifier_pipeline):
         return "Other"
 
 # --- Main Processing Logic ---
-def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer, classifier, 
-
-min_len, max_len):
+def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer, classifier, min_len, max_len):
     """
     Walks a folder, processes supported files, and generates summaries.
     """
@@ -536,61 +542,53 @@ if __name__ == "__main__":
 
         # Question 2: Set the classifier threshold for the selected model
         classifier_threshold_to_use = get_classifier_threshold(summarizer_model_name)
-
-        # Question 3: Ask if user wants to switch to a tiny model
-        tiny_choice = input("\nDo you want to use a tiny model instead for better performance? (y/n) [default: n]: ").strip().lower()
-        if tiny_choice in ['y', 'yes']:
-            summarizer_model_name = select_tiny_model()
-
-        # Question 4: Set summary lengths
+        
+        # Question 3: Set summary lengths
         min_summary_length, max_summary_length = get_summary_lengths()
+        
+        # Question 4: Ask if user wants to select a different classifier
+        classifier_model_name = "MoritzLaurer/xtremedistil-l6-h256-mnli-fever-anli-ling-binary"
+        classifier_choice = input("\nDo you want to select a different classifier model? (y/n) [default: n]: ").strip().lower()
+        if classifier_choice in ['y', 'yes']:
+            classifier_model_name = select_classifier_model()
+
 
         # --- Load Models ---
         print(f"\nStep 1: Loading summarization model ({summarizer_model_name}) and classification model...")
         print("If this is the first time you are running the script, a large file download will begin now. Please wait for it to complete.")
 
-        # NEW: Added loop and token prompt to handle loading errors
-        summarizer = None
-        while summarizer is None:
-            try:
-                print("Step 1a: Explicitly loading tokenizer...")
-                tokenizer = AutoTokenizer.from_pretrained(summarizer_model_name)
-                
-                print("Step 1b: Explicitly loading model...")
-                model = AutoModelForSeq2SeqLM.from_pretrained(summarizer_model_name).to(device)
-                
-                print("Step 1c: Creating summarization pipeline...")
-                summarizer = pipeline(
-                    "summarization",
-                    model=model,
-                    tokenizer=tokenizer,
-                    device=0 if device == 'cuda' else -1,
-                    framework="pt"
-                )
-                print("Step 1d: Summarization model loaded successfully.")
-            except Exception as e:
-                print(f"\nAn error occurred while loading the summarization model: {e}")
-                print("This can happen with private or gated models, or if the model format is incompatible.")
-                
-                token_choice = input("Would you like to try logging in with a Hugging Face token? (y/n): ").strip().lower()
-                if token_choice in ['y', 'yes']:
-                    token = input("Please enter your Hugging Face Hub token: ").strip()
-                    login(token=token)
-                    print("Token accepted. Retrying model download...")
-                else:
-                    print("Model loading failed. Please check the model name or your connection.")
-                    exit()
+        # FIXED: Reverted to simpler loading without token logic
+        try:
+            print("Step 1a: Explicitly loading tokenizer...")
+            tokenizer = AutoTokenizer.from_pretrained(summarizer_model_name)
+            
+            print("Step 1b: Explicitly loading model...")
+            model = AutoModelForSeq2SeqLM.from_pretrained(summarizer_model_name).to(device)
+            
+            print("Step 1c: Creating summarization pipeline...")
+            summarizer = pipeline(
+                "summarization",
+                model=model,
+                tokenizer=tokenizer,
+                device=0 if device == 'cuda' else -1,
+                framework="pt"
+            )
+            print("Step 1d: Summarization model loaded successfully.")
+        except Exception as e:
+            print(f"An error occurred while loading the summarization model: {e}")
+            print("Please check the model name and your internet connection.")
+            exit()
 
         try:
             classifier = pipeline(
                 task="zero-shot-classification",
-                model="MoritzLaurer/xtremedistil-l6-h256-mnli-fever-anli-ling-binary",
+                model=classifier_model_name,
                 device=device,
                 pipeline_class=ThresholdZeroShotClassificationPipeline,
                 # Use the user-defined threshold
                 threshold=classifier_threshold_to_use
             )
-            print("Step 1.1: Classification model loaded successfully with custom threshold.")
+            print(f"Step 1.1: Classification model ({os.path.basename(classifier_model_name)}) loaded successfully with custom threshold.")
         except Exception as e:
             print(f"Error loading classification model: {e}")
             classifier = None
@@ -630,9 +628,7 @@ if __name__ == "__main__":
                 print("Invalid input. Please enter a valid number.")
 
         file_management_settings = {}
-        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip
-
-().lower()
+        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip().lower()
         
         if move_and_rename_choice in ['y', 'yes']:
             print("\n--- Define Global File Management Rules ---")
