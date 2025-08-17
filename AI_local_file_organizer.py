@@ -379,20 +379,21 @@ def load_and_edit_categories():
     return categories
 
 # --- Get Category Weights Function ---
-def get_category_weights(categories):
+def get_category_weights(categories, last_weights=None):
     """
-    Prompts the user to assign weights to each category.
+    Prompts the user to assign weights to each category, using saved weights as defaults.
     """
     weights = {}
     print("\n--- Set Category Weights ---")
     print("Assign a numerical weight to each category (e.g., 2.0 for double importance, 0.5 for half).")
     print("Press Enter to use the default weight of 1.0 for a category.")
     for cat in categories:
+        default_weight = last_weights.get(cat, 1.0) if last_weights else 1.0
         while True:
             try:
-                user_input = input(f"Enter weight for '{cat}' [default: 1.0]: ").strip()
+                user_input = input(f"Enter weight for '{cat}' [default: {default_weight}]: ").strip()
                 if user_input == "":
-                    weights[cat] = 1.0
+                    weights[cat] = default_weight
                 else:
                     weight = float(user_input)
                     if weight >= 0:
@@ -404,6 +405,32 @@ def get_category_weights(categories):
             except ValueError:
                 print("Error: Invalid input. Please enter a valid number.")
     return weights
+
+# --- Save Category Weights ---
+def save_category_weights(weights):
+    """
+    Saves the category weights to a file.
+    """
+    settings_file = "category_weights.json"
+    try:
+        with open(settings_file, 'w', encoding='utf-8') as f:
+            json.dump(weights, f, indent=4)
+    except Exception as e:
+        print(f"Warning: Could not save category weights settings: {e}")
+
+# --- Load Category Weights ---
+def load_category_weights():
+    """
+    Loads the category weights from a file.
+    """
+    settings_file = "category_weights.json"
+    try:
+        if os.path.exists(settings_file):
+            with open(settings_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Warning: Could not load category weights settings file: {e}")
+    return None
 
 # --- Tokenizer and Chunking Function ---
 def chunk_text_by_tokens(text, tokenizer, max_length):
@@ -426,12 +453,20 @@ def chunk_text_by_tokens(text, tokenizer, max_length):
     return chunks
 
 # --- File Reading Functions ---
-def read_pdf(file_path):
-    """Extracts all text from a PDF file."""
+def read_pdf(file_path, start_chunk, end_chunk, tokenizer, chunk_size):
+    """
+    Extracts a specific range of pages from a PDF file as text.
+    This is a memory-efficient approach for large PDFs.
+    """
     text = ""
     try:
-        with fitz.open(file_path) as pdf:
-            for page in pdf:
+        with fitz.open(file_path) as pdf_document:
+            total_pages = pdf_document.page_count
+            start_page = max(1, start_chunk)
+            end_page = min(total_pages, end_chunk)
+            
+            for page_num in range(start_page - 1, end_page):
+                page = pdf_document.load_page(page_num)
                 text += page.get_text()
     except Exception as e:
         print(f"Error reading PDF: {e}")
@@ -575,30 +610,33 @@ def categorize_summary(summary_text, categories, classifier_pipeline, threshold,
     try:
         chunks = chunk_text_by_tokens(summary_text, classifier_pipeline.tokenizer, chunk_size)
         
-        weighted_scores = {cat: 0.0 for cat in categories}
+        # Track the single highest weighted score and its corresponding category
+        highest_weighted_score = -1.0
+        best_category = "Other"
 
         for chunk in chunks:
             result = classifier_pipeline(chunk, candidate_labels=categories)
-            if result['scores'][0] >= threshold:
-                label = result['labels'][0]
-                score = result['scores'][0]
-                # Apply the user-defined weight to the score
-                weighted_score = score * category_weights.get(label, 1.0)
-                weighted_scores[label] += weighted_score
+            
+            # Iterate through all scores for the current chunk
+            for label, score in zip(result['labels'], result['scores']):
+                # Only consider scores above the threshold
+                if score >= threshold:
+                    # Apply the user-defined weight
+                    weighted_score = score * category_weights.get(label, 1.0)
+                    
+                    # Update if the current weighted score is higher than the best so far
+                    if weighted_score > highest_weighted_score:
+                        highest_weighted_score = weighted_score
+                        best_category = label
         
-        # Determine the category with the highest total weighted score
-        if not weighted_scores or all(score == 0.0 for score in weighted_scores.values()):
-            return "Other"
-        
-        most_common_category = max(weighted_scores, key=weighted_scores.get)
-        return most_common_category
+        return best_category
     
     except Exception as e:
         print(f"Step 7.1.3: Error during AI categorization: {e}")
         return "Other"
 
 # --- Main Processing Logic ---
-def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer_pipeline, classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_size, color_code, category_weights):
+def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer_pipeline, classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_size, primary_color_code, secondary_color_code, category_weights):
     """
     Walks a folder, processes supported files, and generates summaries.
     """
@@ -636,7 +674,8 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
     
     BOLD_START = "\033[1m"
     BOLD_END = "\033[0m"
-    COLOR_START = color_code
+    PRIMARY_HIGHLIGHT_START = primary_color_code
+    SECONDARY_HIGHLIGHT_START = secondary_color_code
     COLOR_END = "\033[0m"
 
     for i, file_path in enumerate(file_list):
@@ -648,8 +687,9 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
 
         if reader:
             if file_ext == '.txt':
-                # FIX: Pass required arguments to read_txt
                 text_to_summarize = read_txt(file_path, start_chunk, end_chunk, summarizer_pipeline.tokenizer, token_chunk_size)
+            elif file_ext == '.pdf':
+                text_to_summarize = read_pdf(file_path, start_chunk, end_chunk, summarizer_pipeline.tokenizer, token_chunk_size)
             else:
                 full_text = reader(file_path)
                 if full_text.strip():
@@ -673,25 +713,34 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
 
                 print("Step 8: Final summary complete.")
                 
-                print(f"\nFile: {file_path}\nCategory: {category}\nSummary:\n")
+                # Bold and colorize the category word
+                colored_category_label = f"{PRIMARY_HIGHLIGHT_START}{BOLD_START}Category:{COLOR_END}{BOLD_END} {category}"
+                print(f"\nFile: {file_path}\n{colored_category_label}\nSummary:\n")
 
                 if summary_text != "N/A":
                     display_summary = summary_text
-                    for cat in categories:
-                        cat_words = cat.split()
-                        for word in cat_words:
-                            start_index = 0
-                            while True:
-                                lower_display = display_summary.lower()
-                                lower_word = word.lower()
-                                start_index = lower_display.find(lower_word, start_index)
-                                if start_index == -1:
-                                    break
-                                end_index = start_index + len(word)
-                                original_text = display_summary[start_index:end_index]
-                                display_summary = display_summary[:start_index] + COLOR_START + BOLD_START + original_text + COLOR_END + BOLD_END + display_summary[end_index:]
-                                start_index += len(COLOR_START) + len(BOLD_START) + len(original_text) + len(COLOR_END) + len(BOLD_END)
-                    print(display_summary)
+                    
+                    # Create a set of keywords for efficient lookup
+                    main_cat_words = {word.lower() for word in category.split()}
+                    other_cat_words = set()
+                    for other_cat in categories:
+                        if other_cat.lower() != category.lower() and other_cat.lower() != "other":
+                            other_cat_words.update({word.lower() for word in other_cat.split()})
+                    
+                    words_in_summary = display_summary.split()
+                    
+                    highlighted_summary = []
+                    for word in words_in_summary:
+                        clean_word = word.lower().strip('.,!?"\'')
+                        
+                        if clean_word in main_cat_words:
+                            highlighted_summary.append(f"{PRIMARY_HIGHLIGHT_START}{BOLD_START}{word}{COLOR_END}{BOLD_END}")
+                        elif clean_word in other_cat_words:
+                            highlighted_summary.append(f"{SECONDARY_HIGHLIGHT_START}{word}{COLOR_END}")
+                        else:
+                            highlighted_summary.append(word)
+
+                    print(" ".join(highlighted_summary))
                 else:
                     print("Summary skipped due to insufficient text.")
                 print("\n" + "-"*50)
@@ -740,10 +789,10 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
     print("\n--- Step 9: All supported files processed ---")
     return all_summaries
 
-# --- Get Color Choice Function ---
-def get_color_choice():
+# --- Get Color Choices Function ---
+def get_color_choices():
     """
-    Prompts the user for a color choice and returns the corresponding ANSI code.
+    Prompts the user for primary and secondary color choices and returns the corresponding ANSI codes.
     """
     color_map = {
         'red': "\033[91m",
@@ -751,26 +800,36 @@ def get_color_choice():
         'yellow': "\033[93m",
         'blue': "\033[94m",
         'magenta': "\033[95m",
-        'cyan': "\033[96m"
+        'cyan': "\033[96m",
+        'gray': "\033[90m"
     }
 
-    print("\nChoose a color for bolded text:")
+    print("\nChoose a color for the primary highlighted text:")
     for color in color_map:
         print(f"- {color}")
     
-    choice = input("Enter your choice [default: yellow]: ").strip().lower()
-    return color_map.get(choice, color_map['yellow'])
+    primary_choice = input("Enter your choice [default: yellow]: ").strip().lower()
+    primary_code = color_map.get(primary_choice, color_map['yellow'])
 
+    print("\nChoose a color for the secondary highlighted text (e.g., other matching keywords):")
+    for color in color_map:
+        print(f"- {color}")
+    
+    secondary_choice = input("Enter your choice [default: blue]: ").strip().lower()
+    secondary_code = color_map.get(secondary_choice, color_map['blue'])
+
+    return primary_code, secondary_code
 
 # --- Main Execution ---
 if __name__ == "__main__":
     try:
         last_summarizer_model, last_classifier_model = load_last_models()
+        last_category_weights = load_category_weights()
 
         cache_directory = get_download_directory()
-        color_code = get_color_choice()
-        local_files_only_choice = input("\nEnable local files only mode? (y/n) [default: y]: ").strip().lower()
-        local_files_only = local_files_only_choice in ['y', 'yes', '']
+        primary_color_code, secondary_color_code = get_color_choices()
+        
+        local_files_only = False
 
         summarizer_model_name = select_summarization_model(last_summarizer_model)
 
@@ -828,7 +887,8 @@ if __name__ == "__main__":
             print("Step 1.1: Falling back to 'Other' for all classifications.")
 
         CATEGORIES = load_and_edit_categories()
-        CATEGORY_WEIGHTS = get_category_weights(CATEGORIES)
+        CATEGORY_WEIGHTS = get_category_weights(CATEGORIES, last_category_weights)
+        save_category_weights(CATEGORY_WEIGHTS)
 
         while True:
             folder_path = input("Enter the folder path containing the files: ").strip()
@@ -898,7 +958,8 @@ if __name__ == "__main__":
             max_summary_length,
             classifier_threshold_to_use,
             token_chunk_size,
-            color_code,
+            primary_color_code,
+            secondary_color_code,
             CATEGORY_WEIGHTS
         )
 
