@@ -155,9 +155,7 @@ def get_summary_lengths():
             
             # Ensure max_length is always greater than min_length
             if max_len_to_use < min_len_to_use:
-                print(f"Error: Max length ({max_len_to_use}) must be greater than min length ({min_len_to_use}). Automatically adjusting max length to 
-
-{min_len_to_use + 50}.")
+                print(f"Error: Max length ({max_len_to_use}) must be greater than min length ({min_len_to_use}). Automatically adjusting max length to {min_len_to_use + 50}.")
                 max_len_to_use = min_len_to_use + 50
 
             break
@@ -380,6 +378,33 @@ def load_and_edit_categories():
         
     return categories
 
+# --- Get Category Weights Function ---
+def get_category_weights(categories):
+    """
+    Prompts the user to assign weights to each category.
+    """
+    weights = {}
+    print("\n--- Set Category Weights ---")
+    print("Assign a numerical weight to each category (e.g., 2.0 for double importance, 0.5 for half).")
+    print("Press Enter to use the default weight of 1.0 for a category.")
+    for cat in categories:
+        while True:
+            try:
+                user_input = input(f"Enter weight for '{cat}' [default: 1.0]: ").strip()
+                if user_input == "":
+                    weights[cat] = 1.0
+                else:
+                    weight = float(user_input)
+                    if weight >= 0:
+                        weights[cat] = weight
+                    else:
+                        print("Error: Weight must be a non-negative number.")
+                        continue
+                break
+            except ValueError:
+                print("Error: Invalid input. Please enter a valid number.")
+    return weights
+
 # --- Tokenizer and Chunking Function ---
 def chunk_text_by_tokens(text, tokenizer, max_length):
     """
@@ -540,8 +565,8 @@ def summarize_text(text, summarizer_pipeline, min_len, max_len, chunk_size):
     return [s.strip() for s in combined_summary.split(".") if s.strip()]
     
 # --- Categorization Function ---
-def categorize_summary(summary_text, categories, classifier_pipeline, threshold, chunk_size):
-    """Categorizes a summary by chunking it and returning the most common label."""
+def categorize_summary(summary_text, categories, classifier_pipeline, threshold, chunk_size, category_weights):
+    """Categorizes a summary by chunking it and returning the most common label, with weights applied."""
     if classifier_pipeline is None:
         return "Other"
 
@@ -550,16 +575,22 @@ def categorize_summary(summary_text, categories, classifier_pipeline, threshold,
     try:
         chunks = chunk_text_by_tokens(summary_text, classifier_pipeline.tokenizer, chunk_size)
         
-        chunk_results = []
+        weighted_scores = {cat: 0.0 for cat in categories}
+
         for chunk in chunks:
             result = classifier_pipeline(chunk, candidate_labels=categories)
             if result['scores'][0] >= threshold:
-                chunk_results.append(result['labels'][0])
+                label = result['labels'][0]
+                score = result['scores'][0]
+                # Apply the user-defined weight to the score
+                weighted_score = score * category_weights.get(label, 1.0)
+                weighted_scores[label] += weighted_score
         
-        if not chunk_results:
+        # Determine the category with the highest total weighted score
+        if not weighted_scores or all(score == 0.0 for score in weighted_scores.values()):
             return "Other"
         
-        most_common_category = Counter(chunk_results).most_common(1)[0][0]
+        most_common_category = max(weighted_scores, key=weighted_scores.get)
         return most_common_category
     
     except Exception as e:
@@ -567,9 +598,7 @@ def categorize_summary(summary_text, categories, classifier_pipeline, threshold,
         return "Other"
 
 # --- Main Processing Logic ---
-def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer_pipeline, 
-
-classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_size, color_code):
+def process_files_in_folder(folder_path, scan_subdirectories, categories, start_chunk, end_chunk, file_management_settings, summarizer_pipeline, classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_size, color_code, category_weights):
     """
     Walks a folder, processes supported files, and generates summaries.
     """
@@ -619,6 +648,7 @@ classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_
 
         if reader:
             if file_ext == '.txt':
+                # FIX: Pass required arguments to read_txt
                 text_to_summarize = read_txt(file_path, start_chunk, end_chunk, summarizer_pipeline.tokenizer, token_chunk_size)
             else:
                 full_text = reader(file_path)
@@ -639,7 +669,7 @@ classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_
                     bullet_points = summarize_text(text_to_summarize, summarizer_pipeline, min_len, max_len, token_chunk_size)
                     summary_text = " ".join(bullet_points)
                     print("Step 7.1: Categorizing summary...")
-                    category = categorize_summary(summary_text, categories, classifier_pipeline, classifier_threshold_to_use, token_chunk_size)
+                    category = categorize_summary(summary_text, categories, classifier_pipeline, classifier_threshold_to_use, token_chunk_size, category_weights)
 
                 print("Step 8: Final summary complete.")
                 
@@ -648,10 +678,8 @@ classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_
                 if summary_text != "N/A":
                     display_summary = summary_text
                     for cat in categories:
-                        # Split category into keywords for more robust matching
                         cat_words = cat.split()
                         for word in cat_words:
-                            # Use a case-insensitive replacement for each word
                             start_index = 0
                             while True:
                                 lower_display = display_summary.lower()
@@ -661,9 +689,7 @@ classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_
                                     break
                                 end_index = start_index + len(word)
                                 original_text = display_summary[start_index:end_index]
-                                display_summary = display_summary[:start_index] + COLOR_START + BOLD_START + original_text + COLOR_END + BOLD_END + 
-
-display_summary[end_index:]
+                                display_summary = display_summary[:start_index] + COLOR_START + BOLD_START + original_text + COLOR_END + BOLD_END + display_summary[end_index:]
                                 start_index += len(COLOR_START) + len(BOLD_START) + len(original_text) + len(COLOR_END) + len(BOLD_END)
                     print(display_summary)
                 else:
@@ -743,9 +769,8 @@ if __name__ == "__main__":
 
         cache_directory = get_download_directory()
         color_code = get_color_choice()
-        
-        # User will be asked if they want local files only mode. Default is 'n'.
-        local_files_only = False
+        local_files_only_choice = input("\nEnable local files only mode? (y/n) [default: y]: ").strip().lower()
+        local_files_only = local_files_only_choice in ['y', 'yes', '']
 
         summarizer_model_name = select_summarization_model(last_summarizer_model)
 
@@ -753,9 +778,7 @@ if __name__ == "__main__":
         if last_classifier_model:
             classifier_model_name = last_classifier_model
         
-        classifier_choice = input(f"\nDo you want to select a different classifier model? (The current one is '{classifier_model_name}') (y/n) [default: 
-
-n]: ").strip().lower()
+        classifier_choice = input(f"\nDo you want to select a different classifier model? (The current one is '{classifier_model_name}') (y/n) [default: n]: ").strip().lower()
         if classifier_choice in ['y', 'yes']:
             classifier_model_name = select_classifier_model(last_classifier_model)
         
@@ -769,17 +792,13 @@ n]: ").strip().lower()
         if local_files_only:
             print("Note: Local files only mode is enabled. The script will not attempt to download models.")
         print("If this is the first time you are running the script, a large file download will begin now. Please wait for it to complete.")
-        print("Note: If the script appears unresponsive during this step, it is likely downloading a large file. Forcing a stop with Ctrl+C may not be 
-
-immediate during these operations.")
+        print("Note: If the script appears unresponsive during this step, it is likely downloading a large file. Forcing a stop with Ctrl+C may not be immediate during these operations.")
 
         try:
             print("Step 1a: Explicitly loading tokenizer...")
             summarizer_tokenizer = AutoTokenizer.from_pretrained(summarizer_model_name, cache_dir=cache_directory, local_files_only=local_files_only)
             print("Step 1b: Explicitly loading model...")
-            summarizer_model = AutoModelForSeq2SeqLM.from_pretrained(summarizer_model_name, cache_dir=cache_directory, 
-
-local_files_only=local_files_only).to(device)
+            summarizer_model = AutoModelForSeq2SeqLM.from_pretrained(summarizer_model_name, cache_dir=cache_directory, local_files_only=local_files_only).to(device)
             print("Step 1c: Creating summarization pipeline...")
             summarizer_pipeline = pipeline(
                 "summarization",
@@ -809,6 +828,7 @@ local_files_only=local_files_only).to(device)
             print("Step 1.1: Falling back to 'Other' for all classifications.")
 
         CATEGORIES = load_and_edit_categories()
+        CATEGORY_WEIGHTS = get_category_weights(CATEGORIES)
 
         while True:
             folder_path = input("Enter the folder path containing the files: ").strip()
@@ -842,9 +862,7 @@ local_files_only=local_files_only).to(device)
                 print("Invalid input. Please enter a valid number.")
 
         file_management_settings = {}
-        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip
-
-().lower()
+        move_and_rename_choice = input("\nDo you want to move and rename files to subfolders based on their category? (y/n) [default: n]: ").strip().lower()
         
         if move_and_rename_choice in ['y', 'yes']:
             print("\n--- Define Global File Management Rules ---")
@@ -880,7 +898,8 @@ local_files_only=local_files_only).to(device)
             max_summary_length,
             classifier_threshold_to_use,
             token_chunk_size,
-            color_code
+            color_code,
+            CATEGORY_WEIGHTS
         )
 
         if all_summaries:
