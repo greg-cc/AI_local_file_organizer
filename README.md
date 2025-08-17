@@ -1,4 +1,4 @@
-Create your own categories and have the files in your subdirectory ai scanned and sorted into category-titled subdirectories.  
+Create your own categories and have the files in your subdirectory ai scanned and sorted/moved into category-titled subdirectories.  
 
 Works fast on windows 8.1 machine with no GPU using selections 16 and 15 in menu system. 
 
