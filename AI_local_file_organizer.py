@@ -683,19 +683,19 @@ def process_files_in_folder(folder_path, scan_subdirectories, categories, start_
         
         file_ext = os.path.splitext(file_path)[1].lower()
         reader = supported_extensions.get(file_ext)
-        text_to_summarize = ""
+        
+        filename = os.path.basename(file_path).split('.')[0]
+        text_to_summarize = f"{filename}. "
 
         if reader:
-            if file_ext == '.txt':
-                text_to_summarize = read_txt(file_path, start_chunk, end_chunk, summarizer_pipeline.tokenizer, token_chunk_size)
-            elif file_ext == '.pdf':
-                text_to_summarize = read_pdf(file_path, start_chunk, end_chunk, summarizer_pipeline.tokenizer, token_chunk_size)
+            if file_ext == '.txt' or file_ext == '.pdf':
+                text_to_summarize += reader(file_path, start_chunk, end_chunk, summarizer_pipeline.tokenizer, token_chunk_size)
             else:
                 full_text = reader(file_path)
                 if full_text.strip():
                     all_chunks = chunk_text_by_tokens(full_text, summarizer_pipeline.tokenizer, token_chunk_size)
                     selected_chunks = all_chunks[start_chunk-1:end_chunk]
-                    text_to_summarize = " ".join(selected_chunks)
+                    text_to_summarize += " ".join(selected_chunks)
             
             if text_to_summarize.strip():
                 print(f"Step 6: Extracting text from chunks {start_chunk} to {end_chunk}...")
