@@ -422,19 +422,56 @@ def read_docx(file_path):
         print(f"Error reading DOCX: {e}")
     return text
 
-def read_txt(file_path):
-    """Reads all text from a plain TXT file with improved encoding handling."""
+def read_txt(file_path, start_chunk, end_chunk, tokenizer, chunk_size):
+    """
+    Reads a text file in a memory-efficient way and returns the specified chunks.
+    This function avoids loading the entire file into memory at once.
+    """
     text = ""
+    current_word_count = 0
+    start_word_index = (start_chunk - 1) * chunk_size
+    end_word_index = end_chunk * chunk_size
+
     try:
-        with open(file_path, "r", encoding="utf-8") as file:
-            text = file.read()
+        file_reader = open(file_path, "r", encoding="utf-8")
+        for line in file_reader:
+            words = line.split()
+            for word in words:
+                if start_word_index <= current_word_count < end_word_index:
+                    text += word + " "
+                current_word_count += 1
+                if current_word_count >= end_word_index:
+                    break
+            if current_word_count >= end_word_index:
+                break
+        file_reader.close()
+    
     except UnicodeDecodeError:
         print("UTF-8 decode failed. Falling back to latin-1 encoding.")
-        with open(file_path, "r", encoding="latin-1", errors='replace') as file:
-            text = file.read()
+        try:
+            file_reader = open(file_path, "r", encoding="latin-1", errors='replace')
+            current_word_count = 0
+            text = ""
+            for line in file_reader:
+                words = line.split()
+                for word in words:
+                    if start_word_index <= current_word_count < end_word_index:
+                        text += word + " "
+                    current_word_count += 1
+                    if current_word_count >= end_word_index:
+                        break
+                if current_word_count >= end_word_index:
+                    break
+            file_reader.close()
+        except Exception as e:
+            print(f"Error reading TXT: {e}")
+            return ""
     except Exception as e:
         print(f"Error reading TXT: {e}")
-    return text
+        return ""
+    
+    return text.strip()
+
 
 def read_excel(file_path):
     """Extracts all text from an XLSX (Excel) file."""
@@ -472,7 +509,6 @@ def summarize_text(text, summarizer_pipeline, min_len, max_len, chunk_size):
     if not text.strip():
         return ["No text to summarize."]
 
-    # Use the pipeline's tokenizer for chunking to avoid token size issues
     chunks = chunk_text_by_tokens(text, summarizer_pipeline.tokenizer, chunk_size)
     
     summaries = []
@@ -512,21 +548,17 @@ def categorize_summary(summary_text, categories, classifier_pipeline, threshold,
     print("Step 7.1.1: Sending summary to classifier model...")
     
     try:
-        # Use the classifier's tokenizer to create chunks from the summary
         chunks = chunk_text_by_tokens(summary_text, classifier_pipeline.tokenizer, chunk_size)
         
-        # Classify each chunk
         chunk_results = []
         for chunk in chunks:
             result = classifier_pipeline(chunk, candidate_labels=categories)
             if result['scores'][0] >= threshold:
                 chunk_results.append(result['labels'][0])
         
-        # If no chunks were classified above the threshold, return "Other"
         if not chunk_results:
             return "Other"
         
-        # Find the most common category among the classified chunks
         most_common_category = Counter(chunk_results).most_common(1)[0][0]
         return most_common_category
     
@@ -573,7 +605,6 @@ classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_
 
     all_summaries = []
     
-    # ANSI escape codes for formatting
     BOLD_START = "\033[1m"
     BOLD_END = "\033[0m"
     COLOR_START = color_code
@@ -582,89 +613,100 @@ classifier_pipeline, min_len, max_len, classifier_threshold_to_use, token_chunk_
     for i, file_path in enumerate(file_list):
         print(f"\nStep 5: Processing file {i + 1}/{len(file_list)} - {os.path.basename(file_path)}")
         
-        # Read the full text first
-        reader = supported_extensions[os.path.splitext(file_path)[1].lower()]
-        full_text = reader(file_path)
+        file_ext = os.path.splitext(file_path)[1].lower()
+        reader = supported_extensions.get(file_ext)
+        text_to_summarize = ""
 
-        if full_text.strip():
-            # Get the chunks based on the requested range
-            all_chunks = chunk_text_by_tokens(full_text, summarizer_pipeline.tokenizer, token_chunk_size)
+        if reader:
+            if file_ext == '.txt':
+                text_to_summarize = read_txt(file_path, start_chunk, end_chunk, summarizer_pipeline.tokenizer, token_chunk_size)
+            else:
+                full_text = reader(file_path)
+                if full_text.strip():
+                    all_chunks = chunk_text_by_tokens(full_text, summarizer_pipeline.tokenizer, token_chunk_size)
+                    selected_chunks = all_chunks[start_chunk-1:end_chunk]
+                    text_to_summarize = " ".join(selected_chunks)
             
-            # Select the specific chunks the user requested
-            selected_chunks = all_chunks[start_chunk-1:end_chunk]
+            if text_to_summarize.strip():
+                print(f"Step 6: Extracting text from chunks {start_chunk} to {end_chunk}...")
+                print("Step 7: Text extracted successfully. Starting summarization...")
+                
+                if len(text_to_summarize.split()) < min_len:
+                    print(f"Warning: Extracted text is too short ({len(text_to_summarize.split())} words) for effective summarization. Skipping file.")
+                    category = "Other"
+                    summary_text = "N/A"
+                else:
+                    bullet_points = summarize_text(text_to_summarize, summarizer_pipeline, min_len, max_len, token_chunk_size)
+                    summary_text = " ".join(bullet_points)
+                    print("Step 7.1: Categorizing summary...")
+                    category = categorize_summary(summary_text, categories, classifier_pipeline, classifier_threshold_to_use, token_chunk_size)
 
-            if not selected_chunks:
-                print(f"Warning: No text found in chunks {start_chunk} to {end_chunk}. Skipping file.")
-                continue
+                print("Step 8: Final summary complete.")
+                
+                print(f"\nFile: {file_path}\nCategory: {category}\nSummary:\n")
 
-            print(f"Step 6: Extracting text from chunks {start_chunk} to {end_chunk}...")
-            text_to_summarize = " ".join(selected_chunks)
-
-            print("Step 7: Text extracted successfully. Starting summarization...")
-            bullet_points = summarize_text(text_to_summarize, summarizer_pipeline, min_len, max_len, token_chunk_size)
-            
-            summary_text = " ".join(bullet_points)
-            print("Step 7.1: Categorizing summary...")
-            category = categorize_summary(summary_text, categories, classifier_pipeline, classifier_threshold_to_use, token_chunk_size)
-
-            print("Step 8: Final summary complete.")
-            
-            print(f"\nFile: {file_path}\nCategory: {category}\nSummary:\n")
-
-            # Bold and colorize the matching category text in the summary for display
-            display_summary = summary_text
-            for cat in categories:
-                if cat.lower() in display_summary.lower():
-                    start_index = 0
-                    while True:
-                        start_index = display_summary.lower().find(cat.lower(), start_index)
-                        if start_index == -1:
-                            break
-                        end_index = start_index + len(cat)
-                        original_text = display_summary[start_index:end_index]
-                        display_summary = display_summary[:start_index] + COLOR_START + BOLD_START + original_text + COLOR_END + BOLD_END + 
+                if summary_text != "N/A":
+                    display_summary = summary_text
+                    for cat in categories:
+                        # Split category into keywords for more robust matching
+                        cat_words = cat.split()
+                        for word in cat_words:
+                            # Use a case-insensitive replacement for each word
+                            start_index = 0
+                            while True:
+                                lower_display = display_summary.lower()
+                                lower_word = word.lower()
+                                start_index = lower_display.find(lower_word, start_index)
+                                if start_index == -1:
+                                    break
+                                end_index = start_index + len(word)
+                                original_text = display_summary[start_index:end_index]
+                                display_summary = display_summary[:start_index] + COLOR_START + BOLD_START + original_text + COLOR_END + BOLD_END + 
 
 display_summary[end_index:]
-                        start_index += len(COLOR_START) + len(BOLD_START) + len(COLOR_END) + len(BOLD_END) + len(cat)
-            
-            # Print the formatted summary
-            print(display_summary)
-            print("\n" + "-"*50)
+                                start_index += len(COLOR_START) + len(BOLD_START) + len(original_text) + len(COLOR_END) + len(BOLD_END)
+                    print(display_summary)
+                else:
+                    print("Summary skipped due to insufficient text.")
+                print("\n" + "-"*50)
 
-            summary_text_for_file = ""
-            for point in bullet_points:
-                summary_text_for_file += f"- {point}\n"
-            
-            all_summaries.append({
-                'file_path': os.path.abspath(file_path),
-                'category': category,
-                'summary': summary_text_for_file
-            })
-
-            # FIX: Added specific logic to handle files categorized as "Other"
-            final_category = category
-            if final_category not in file_management_settings:
-                final_category = "Other"
-                dest_folder_name = "Other"
-                file_management_settings[final_category] = {'destination': os.path.join(folder_path, dest_folder_name), 'prefix': ''}
-
-            if final_category in file_management_settings and file_management_settings[final_category].get('destination'):
-                settings = file_management_settings[final_category]
-                prefix = settings.get('prefix', '')
-                destination_folder = settings['destination']
+                summary_text_for_file = ""
+                if summary_text != "N/A":
+                    for point in bullet_points:
+                        summary_text_for_file += f"- {point}\n"
+                else:
+                    summary_text_for_file = "Summary skipped due to insufficient text."
                 
-                os.makedirs(destination_folder, exist_ok=True)
+                all_summaries.append({
+                    'file_path': os.path.abspath(file_path),
+                    'category': category,
+                    'summary': summary_text_for_file
+                })
 
-                original_file_name, original_file_extension = os.path.splitext(os.path.basename(file_path))
-                
-                new_file_name = f"{prefix}{original_file_name}{original_file_extension}"
-                destination_path = os.path.join(destination_folder, new_file_name)
-                
-                try:
-                    shutil.move(file_path, destination_path)
-                    print(f"Moved and renamed: {file_path} -> {destination_path}")
-                except Exception as move_e:
-                    print(f"Error moving original file: {move_e}")
+                final_category = category
+                if final_category not in file_management_settings:
+                    final_category = 'Other'
+                    if final_category not in file_management_settings:
+                        dest_folder_name = "Other"
+                        file_management_settings[final_category] = {'destination': os.path.join(folder_path, dest_folder_name), 'prefix': ''}
+
+                if final_category in file_management_settings and file_management_settings[final_category].get('destination'):
+                    settings = file_management_settings[final_category]
+                    prefix = settings.get('prefix', '')
+                    destination_folder = settings['destination']
+                    
+                    os.makedirs(destination_folder, exist_ok=True)
+
+                    original_file_name, original_file_extension = os.path.splitext(os.path.basename(file_path))
+                    
+                    new_file_name = f"{prefix}{original_file_name}{original_file_extension}"
+                    destination_path = os.path.join(destination_folder, new_file_name)
+                    
+                    try:
+                        shutil.move(file_path, destination_path)
+                        print(f"Moved and renamed: {file_path} -> {destination_path}")
+                    except Exception as move_e:
+                        print(f"Error moving original file: {move_e}")
             
         else:
             print("Step 8.1: Skipping file - unable to extract meaningful text.")
@@ -697,42 +739,35 @@ def get_color_choice():
 # --- Main Execution ---
 if __name__ == "__main__":
     try:
-        # Load last used models if they exist
         last_summarizer_model, last_classifier_model = load_last_models()
 
-        # Step 0: Get the download directory for models and color choice
         cache_directory = get_download_directory()
         color_code = get_color_choice()
+        
+        # User will be asked if they want local files only mode. Default is 'n'.
+        local_files_only = False
 
-        # Question 1: Select the summarization model
         summarizer_model_name = select_summarization_model(last_summarizer_model)
 
-        # Question 2: Ask if user wants to select a different classifier
         classifier_model_name = "MoritzLaurer/xtremedistil-l6-h256-mnli-fever-anli-ling-binary"
-        classifier_choice = input(f"\nDo you want to select a different classifier model? (y/n) [default: n]: ").strip().lower()
+        if last_classifier_model:
+            classifier_model_name = last_classifier_model
+        
+        classifier_choice = input(f"\nDo you want to select a different classifier model? (The current one is '{classifier_model_name}') (y/n) [default: 
+
+n]: ").strip().lower()
         if classifier_choice in ['y', 'yes']:
             classifier_model_name = select_classifier_model(last_classifier_model)
-        else:
-            # If the user chose not to select a new model, and we have a last one, use it.
-            if last_classifier_model:
-                classifier_model_name = last_classifier_model
         
-        # Question 3: Set the classifier threshold for the selected model
         classifier_threshold_to_use = get_classifier_threshold(classifier_model_name)
-        
-        # Question 4: Set summary lengths
         min_summary_length, max_summary_length = get_summary_lengths()
-        
-        # Question 5: Set the max token chunk size
         token_chunk_size = get_token_chunk_size()
 
-
-        # --- Save last models for next run ---
         save_last_models(summarizer_model_name, classifier_model_name)
 
-
-        # --- Load Models ---
         print(f"\nStep 1: Loading summarization model ({summarizer_model_name}) and classification model...")
+        if local_files_only:
+            print("Note: Local files only mode is enabled. The script will not attempt to download models.")
         print("If this is the first time you are running the script, a large file download will begin now. Please wait for it to complete.")
         print("Note: If the script appears unresponsive during this step, it is likely downloading a large file. Forcing a stop with Ctrl+C may not be 
 
@@ -740,11 +775,11 @@ immediate during these operations.")
 
         try:
             print("Step 1a: Explicitly loading tokenizer...")
-            summarizer_tokenizer = AutoTokenizer.from_pretrained(summarizer_model_name, cache_dir=cache_directory)
-            
+            summarizer_tokenizer = AutoTokenizer.from_pretrained(summarizer_model_name, cache_dir=cache_directory, local_files_only=local_files_only)
             print("Step 1b: Explicitly loading model...")
-            summarizer_model = AutoModelForSeq2SeqLM.from_pretrained(summarizer_model_name, cache_dir=cache_directory).to(device)
-            
+            summarizer_model = AutoModelForSeq2SeqLM.from_pretrained(summarizer_model_name, cache_dir=cache_directory, 
+
+local_files_only=local_files_only).to(device)
             print("Step 1c: Creating summarization pipeline...")
             summarizer_pipeline = pipeline(
                 "summarization",
@@ -764,7 +799,8 @@ immediate during these operations.")
                 task="zero-shot-classification",
                 model=classifier_model_name,
                 device=device,
-                cache_dir=cache_directory
+                cache_dir=cache_directory,
+                local_files_only=local_files_only
             )
             print(f"Step 1.1: Classification model ({os.path.basename(classifier_model_name)}) loaded successfully with custom threshold.")
         except Exception as e:
@@ -814,6 +850,10 @@ immediate during these operations.")
             print("\n--- Define Global File Management Rules ---")
             prefix = input("Enter a global prefix for all renamed files (e.g., 'PROJ_') [leave blank for none]: ").strip()
             
+            file_management_settings['Other'] = {
+                'prefix': prefix,
+                'destination': os.path.join(folder_path, 'Other')
+            }
             for category in CATEGORIES:
                 if category != "Other":
                     dest_folder_name = category.replace(' ', '_')
@@ -821,11 +861,6 @@ immediate during these operations.")
                         'prefix': prefix,
                         'destination': os.path.join(folder_path, dest_folder_name)
                     }
-            # Automatically add a rule for the "Other" category
-            file_management_settings['Other'] = {
-                'prefix': prefix,
-                'destination': os.path.join(folder_path, 'Other')
-            }
 
             print("File management rules have been set up automatically for all categories.")
 
