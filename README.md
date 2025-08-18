@@ -8,7 +8,9 @@ Instructions: download py file and run using below.
 cmd> python GCailocalfilecategorizer3.py
 
 Top to bottom Gemini Canvas creation.  Modificaions in gemini canvas should work.
+
 -----------------------------------------------------------------------------------
+
 ### Offline AI-Powered Python based File Sorter and Summarizer (with Windows 8 support)
 
 This Python script uses AI to automatically read, summarize, and categorize your documents. It helps you quickly understand the content of your files and organize them into topic-based folders without manual effort.
