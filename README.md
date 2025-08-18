@@ -1,11 +1,9 @@
 Create your own categories and have the files in your subdirectory ai scanned and sorted/moved into category-titled subdirectories.  
 
-Works fast on windows 8.1 machine with no GPU using selections 16 and 15 in menu system. 
-
-15+ summarization and 15+ categorizations models automatically downloaded upon selection.
+Works on windows 8.1 machines, but with no GPU.
 
 Instructions: download py file and run using below.
-cmd> python GCailocalfilecategorizer3.py
+cmd> python AI_local_file_organizer.py
 
 Top to bottom Gemini Canvas creation.  Modificaions in gemini canvas should work.
 
