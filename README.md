@@ -16,6 +16,7 @@ This Python script uses AI to automatically read, summarize, and categorize your
 The tool processes various file types, including PDF, DOCX, TXT, XLSX, and PPTX, using a local, offline AI model to ensure your data remains private.
 
 **Key Features**
+
 Automatic Summarization: Generates concise, bullet-point summaries of your documents using a t5-small model.
 
 AI-Powered Categorization: Uses a zero-shot classification model (xtremedistil-l6-h256) to sort files into custom categories like "Health," "History," "Finance," etc.
@@ -30,7 +31,9 @@ Create Shortcuts.
 
 Or do nothing and just view the analysis.
 
-Multiple File Sources: Process files by scanning an entire folder (and its subdirectories) or by providing a specific list of file paths in a text file.
+##Multiple File Sources:##
+
+Process files by scanning an entire folder (and its subdirectories) or by providing a specific list of file paths in a text file.
 
 Customizable: Easily edit categories, summary length, and file processing rules through a command-line interface.
 
