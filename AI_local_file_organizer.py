@@ -1,4 +1,4 @@
-# comboaisort33.py
+# comboaisort36.py
 import os
 import fitz  # PyMuPDF for PDF
 from docx import Document
@@ -107,7 +107,7 @@ def read_chunks_from_file(file_path, start_chunk, end_chunk, max_chunk_length):
             with open(file_path, "r", encoding="utf-8") as f: words = f.read().split()
         elif ext == ".xlsx":
             for sheet in pd.ExcelFile(file_path).sheet_names:
-                df = pd.read_excel(file_path, sheet_name=sheet) # CORRECTED LINE
+                df = pd.read_excel(file_path, sheet_name=sheet)
                 words.extend(df.to_string(index=False).split())
                 if len(words) >= total_words_needed: break
         elif ext == ".pptx":
@@ -144,31 +144,35 @@ def categorize_summary(summary_text, categories):
     except Exception as e:
         print(f"Error during categorization: {e}"); return {'labels': ['Other'], 'scores': [1.0]}
 
-def tag_file_properties(file_path, categories_to_tag):
+def tag_file_properties(file_path, primary_category, secondary_categories):
     ext = os.path.splitext(file_path)[1].lower()
     if not os.path.exists(file_path):
         print(f"Tagging skipped: File not found at {file_path}"); return
+    
+    keyword_parts = []
+    if primary_category and primary_category != "Other": keyword_parts.append(f"AILFO Primary:; {primary_category}")
+    for cat in secondary_categories: keyword_parts.append(f"2nd:; {cat}")
+    keyword_string = ":: ".join(keyword_parts)
+    
+    if not keyword_string:
+        print(f"No valid categories to tag for {os.path.basename(file_path)}"); return
+
     try:
-        current_keywords, obj, keywords = set(), None, ""
+        obj = None
         if ext == ".pdf":
             doc = fitz.open(file_path)
-            keywords = doc.metadata.get("keywords", "")
-            current_keywords = {kw.strip() for kw in keywords.split(';') if kw.strip()}
-            for cat in categories_to_tag: current_keywords.add(cat)
-            doc.metadata["keywords"] = "; ".join(sorted(list(current_keywords)))
+            doc.metadata["keywords"] = keyword_string
             doc.save(file_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP); doc.close()
         elif ext in [".docx", ".pptx", ".xlsx"]:
-            if ext == ".docx": obj = Document(file_path); keywords = obj.core_properties.keywords
-            elif ext == ".pptx": obj = Presentation(file_path); keywords = obj.core_properties.keywords
-            elif ext == ".xlsx": obj = load_workbook(file_path); keywords = obj.properties.keywords
-            current_keywords = {kw.strip() for kw in (keywords or "").split(';') if kw.strip()}
-            for cat in categories_to_tag: current_keywords.add(cat)
-            if ext != ".xlsx": obj.core_properties.keywords = "; ".join(sorted(list(current_keywords)))
-            else: obj.properties.keywords = "; ".join(sorted(list(current_keywords)))
+            if ext == ".docx": obj = Document(file_path)
+            elif ext == ".pptx": obj = Presentation(file_path)
+            elif ext == ".xlsx": obj = load_workbook(file_path)
+            if ext != ".xlsx": obj.core_properties.keywords = keyword_string
+            else: obj.properties.keywords = keyword_string
             obj.save(file_path)
         else:
             print(f"Tagging not supported for {ext} files."); return
-        print(f"Tagged '{os.path.basename(file_path)}' with: {', '.join(categories_to_tag)}")
+        print(f"Tagged '{os.path.basename(file_path)}' with: {keyword_string}")
     except Exception as e:
         print(f"Error tagging file {os.path.basename(file_path)}: {e}")
 
@@ -231,6 +235,32 @@ def process_files_in_folder(file_list, categories, file_management_settings, set
     all_summaries = []
     for i, file_path in enumerate(file_list):
         print(f"\n--- AI Processing file {i + 1}/{len(file_list)}: {os.path.basename(file_path)} ---")
+
+        # --- RE-INTEGRATED: Check if output file already exists ---
+        if settings['file_action_choice'] != 'none':
+            file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
+            cleaned_file_name = file_name_no_ext.replace('_', ' ').replace('-', ' ')
+            already_processed = False
+            for category in categories:
+                if category == "Other": continue
+
+                prefix = file_management_settings.get(category, {}).get('prefix', '')
+                new_file_name_no_ext = f"{prefix}_{cleaned_file_name}" if prefix else cleaned_file_name
+                
+                if settings['file_action_choice'] == 'shortcut':
+                    expected_output_name = new_file_name_no_ext + ".url" if sys.platform == "win32" else new_file_name_no_ext
+                else:
+                    expected_output_name = new_file_name_no_ext + os.path.splitext(file_path)[1]
+
+                sanitized_cat = sanitize_for_path(category)
+                potential_dest_path = os.path.join(settings['output_folder_path'], sanitized_cat, expected_output_name)
+
+                if os.path.exists(potential_dest_path):
+                    print(f"Skipping: Output file '{expected_output_name}' appears to exist in '{sanitized_cat}' subfolder.")
+                    already_processed = True
+                    break
+            if already_processed:
+                continue
         
         is_pdf = os.path.splitext(file_path)[1].lower() == '.pdf'
         padding = settings['pdf_padding'] if is_pdf else settings['generic_padding']
@@ -243,22 +273,22 @@ def process_files_in_folder(file_list, categories, file_management_settings, set
         bullet_points = summarize_text(text, max_chunk_length, settings['max_summary_length'], settings['min_summary_length'])
         if not bullet_points or bullet_points == ["No text to summarize."]: print("Summarization failed."); continue
 
-        cleaned_file_name = os.path.splitext(os.path.basename(file_path))[0].replace('_', ' ').replace('-', ' ')
         results = categorize_summary(". ".join([cleaned_file_name] + bullet_points), categories)
         
-        primary_category, all_valid_categories = "Other", []
+        primary_category, secondary_categories, all_valid_categories = "Other", [], []
         if results['scores'][0] * 100 >= settings['confidence_threshold']:
             primary_category = results['labels'][0]
             all_valid_categories.append(primary_category)
             for label, score in zip(results['labels'][1:], results['scores'][1:]):
                 if score * 100 >= settings['secondary_confidence_threshold']:
+                    secondary_categories.append(label)
                     all_valid_categories.append(label)
         
         if settings['tagging_enabled_choice'] in ['y', 'yes'] and all_valid_categories:
-            tag_file_properties(file_path, all_valid_categories)
+            tag_file_properties(file_path, primary_category, secondary_categories)
         
         print(f"Primary Category: {Fore.GREEN}{Style.BRIGHT}{primary_category} ({results['scores'][0]*100:.2f}%)")
-        if len(all_valid_categories) > 1: print(f"Secondary Categories: {Fore.YELLOW}{', '.join(all_valid_categories[1:])}")
+        if secondary_categories: print(f"Secondary Categories: {Fore.YELLOW}{', '.join(secondary_categories)}")
         
         all_summaries.append({'file_path': os.path.abspath(file_path), 'primary_category': primary_category, 'all_categories': all_valid_categories, 
 
@@ -282,10 +312,14 @@ def process_files_in_folder(file_list, categories, file_management_settings, set
                         destination_path_with_ext = destination_path + os.path.splitext(file_path)[1]
                         if settings['file_action_choice'] == 'move' and os.path.exists(file_path):
                             shutil.move(file_path, destination_path_with_ext)
-                            if settings['tagging_enabled_choice'] in ['y', 'yes']: tag_file_properties(destination_path_with_ext, all_valid_categories)
+                            if settings['tagging_enabled_choice'] in ['y', 'yes']: tag_file_properties(destination_path_with_ext, primary_category, 
+
+secondary_categories)
                         elif settings['file_action_choice'] == 'copy':
                             shutil.copy2(file_path, destination_path_with_ext)
-                            if settings['tagging_enabled_choice'] in ['y', 'yes']: tag_file_properties(destination_path_with_ext, all_valid_categories)
+                            if settings['tagging_enabled_choice'] in ['y', 'yes']: tag_file_properties(destination_path_with_ext, primary_category, 
+
+secondary_categories)
                 except Exception as e: print(f"Error during file operation: {e}")
     return all_summaries
 
@@ -410,6 +444,7 @@ settings_to_save['generic_chunks'])
         
         settings_to_save['source_choice'] = source_choice
         settings_to_save['last_destination_folder'] = output_folder_path
+        if source_choice == 'l': settings_to_save['last_list_file'] = list_file_path
         with open(settings_file, 'w') as f: json.dump(settings_to_save, f, indent=4)
         print("\nSettings saved. Starting process...")
         
