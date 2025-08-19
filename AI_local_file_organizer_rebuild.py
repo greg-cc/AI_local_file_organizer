@@ -313,7 +313,9 @@ def process_files_in_folder(file_list, categories, file_management_settings, set
     print(f"\n--- Starting Main AI Processing for {len(file_list)} files... ---")
     all_summaries = []
     for i, file_path in enumerate(file_list):
-        print(f"\n--- AI Processing file {i + 1}/{len(file_list)}: {os.path.basename(file_path)} ---")
+        # --- MODIFICATION START: Colorize file path
+        print(f"\n--- AI Processing file {i + 1}/{len(file_list)}: {Fore.LIGHTRED_EX}{os.path.basename(file_path)}{Style.RESET_ALL} ---")
+        # --- MODIFICATION END ---
         if settings['file_action_choice'] != 'none':
             file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
             cleaned_file_name_for_skip = file_name_no_ext.replace('_', ' ').replace('-', ' ')
@@ -394,7 +396,7 @@ def process_files_in_folder(file_list, categories, file_management_settings, set
         # --- MODIFICATION END ---
         
         print("Step 7: Text extracted successfully. Starting summarization...")
-
+        
         max_summary_length_final = settings['max_summary_length']
         min_summary_length_final = settings['min_summary_length']
         if is_pdf:
@@ -419,21 +421,17 @@ continue
 
         print("\n--- Plain Text Summary ---")
         summary_text_for_file = ""
-        # --- MODIFICATION START: Colorize the plain text summary output
         for point in bullet_points:
             p_strip = point.strip()
             if p_strip:
                 print(f"{Fore.LIGHTGREEN_EX}- {p_strip}{Style.RESET_ALL}")
                 summary_text_for_file += f"- {p_strip}\n"
-        # --- MODIFICATION END ---
 
         cleaned_file_name = os.path.splitext(os.path.basename(file_path))[0].replace('_', ' ').replace('-', ' ')
         
-        # --- MODIFICATION START: Capture original category before it's potentially changed to "Other"
         results = categorize_summary(". ".join([cleaned_file_name] + bullet_points), categories)
         original_primary_category = results['labels'][0]
         original_primary_score = results['scores'][0]
-        # --- MODIFICATION END ---
         
         primary_category, secondary_categories, all_valid_categories = "Other", [], []
         if original_primary_score * 100 >= settings['confidence_threshold']:
@@ -452,7 +450,6 @@ continue
 
         print(f"\nFile: {file_path}")
         
-        # --- MODIFICATION START: Show original and final category if changed
         category_color = Fore.YELLOW if primary_category == "Other" else Fore.GREEN
         if primary_category == "Other" and original_primary_category != "Other":
             print(f"Primary Category: {category_color}{Style.BRIGHT}{primary_category} (was '{original_primary_category}' at 
@@ -460,7 +457,6 @@ continue
 {original_primary_score*100:.2f}%)")
         else:
             print(f"Primary Category: {category_color}{Style.BRIGHT}{primary_category} ({results['scores'][0]*100:.2f}%)")
-        # --- MODIFICATION END ---
 
         if secondary_categories:
             colors = [Fore.CYAN, Fore.LIGHTGREEN_EX]
