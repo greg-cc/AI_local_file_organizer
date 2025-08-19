@@ -1,8 +1,16 @@
+# comboaisort41.py
 import os
+import sys
+
+# Suppress TensorFlow/oneDNN warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
 import fitz  # PyMuPDF for PDF
 from docx import Document
 import pandas as pd
 from pptx import Presentation
+from openpyxl import load_workbook
 from transformers import pipeline
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
@@ -11,43 +19,26 @@ import json
 import colorama
 from colorama import Fore, Style
 import re
+import multiprocessing
 
 # Initialize colorama to auto-reset styles after each print
 colorama.init(autoreset=True)
 
-# Check for GPU availability and set the device
-if torch.cuda.is_available():
-    device = "cuda"
-    print("Device set to use GPU.")
-else:
-    device = "cpu"
-    print("GPU not found. Device set to use CPU.")
+# --- Global Variables for Models ---
+summarizer = None
+classifier = None
 
-# --- Configuration ---
-# These are now set via user input in the main execution block.
-
-# Define the categories for categorization
-CATEGORIES = [
-    "Health",
-    "History",
-    "Weather",
-    "do not combine general categories with categories containing targeted things within it (delete this)"
-]
+# --- Helper Function ---
+def sanitize_for_path(name):
+    """Truncates and sanitizes a string to be a valid directory/file name."""
+    sanitized = re.sub(r'[<>:"/\\|?*]', '', name)
+    return sanitized[:50].strip()
 
 # --- Load and Edit Categories Function ---
 def load_and_edit_categories():
-    """
-    Loads categories from a file, prompts the user to edit them, and saves the final list.
-    """
     category_file = "categories.json"
-    default_categories = [
-        "Health",
-        "History",
-        "Weather",
-        "do not combine general categories with categories containing targeted things within it (delete this)"
-    ]
+    default_categories = ["Example Category 1", "Example Category 2"]
     categories = default_categories
-    
     try:
         if os.path.exists(category_file):
             with open(category_file, 'r', encoding='utf-8') as f:
@@ -57,597 +48,695 @@ def load_and_edit_categories():
         print(f"Error loading categories file: {e}. Using default categories.")
 
     print("\n--- Current Categories ---")
-    for i, cat in enumerate(categories):
-        print(f"[{i+1}] {cat}")
+    for i, cat in enumerate(categories): print(f"[{i+1}] {cat}")
     print("--------------------------")
-    
-    edit_choice = input("Do you want to edit these categories? (y/n) [default: no]: ").strip().lower()
-    if edit_choice in ['y', 'yes']:
-        instructions = "\nEditing categories. Enter 'add <new_category>', 'remove <number>', 'edit <number> <new_category>', 'list', or 'done' to finish."
+
+    if input("Do you want to edit these categories? (y/n) [default: no]: ").strip().lower() in ['y', 'yes']:
+        instructions = "\nEditing categories: 'add <name>', 'remove <num>', 'edit <num> <name>', 'list', 'done'"
         print(instructions)
         while True:
             command = input("> ").strip().lower()
-            if command == 'done':
-                break
-            
+            if command == 'done': break
             parts = command.split()
-            if not parts:
-                continue
-
+            if not parts: continue
             action = parts[0]
-            if action == 'add' and len(parts) >= 2:
-                new_cat = " ".join(parts[1:])
-                categories.append(new_cat)
-                print(f"Added: {new_cat}")
-                print("\n--- Current Categories ---")
-                for i, cat in enumerate(categories):
-                    print(f"[{i+1}] {cat}")
-                print("--------------------------")
-                print(instructions)
+            if action == 'add' and len(parts) >= 2: categories.append(" ".join(parts[1:])); print(f"Added: {' '.join(parts[1:])}")
             elif action == 'remove' and len(parts) == 2 and parts[1].isdigit():
                 idx = int(parts[1]) - 1
-                if 0 <= idx < len(categories):
-                    removed_cat = categories.pop(idx)
-                    print(f"Removed: {removed_cat}")
-                    print("\n--- Current Categories ---")
-                    for i, cat in enumerate(categories):
-                        print(f"[{i+1}] {cat}")
-                    print("--------------------------")
-                    print(instructions)
-                else:
-                    print("Invalid category number.")
+                if 0 <= idx < len(categories): print(f"Removed: {categories.pop(idx)}")
+                else: print("Invalid number.")
             elif action == 'edit' and len(parts) >= 3 and parts[1].isdigit():
                 idx = int(parts[1]) - 1
                 if 0 <= idx < len(categories):
-                    new_cat = " ".join(parts[2:])
                     old_cat = categories[idx]
-                    categories[idx] = new_cat
-                    print(f"Edited: '{old_cat}' to '{new_cat}'")
-                    print("\n--- Current Categories ---")
-                    for i, cat in enumerate(categories):
-                        print(f"[{i+1}] {cat}")
-                    print("--------------------------")
-                    print(instructions)
-                else:
-                    print("Invalid category number.")
+                    categories[idx] = " ".join(parts[2:])
+                    print(f"Edited '{old_cat}' to '{categories[idx]}'")
+                else: print("Invalid number.")
             elif action == 'list':
-                print("\n--- Current Categories ---")
-                for i, cat in enumerate(categories):
-                    print(f"[{i+1}] {cat}")
-                print("--------------------------")
-                print(instructions)
-            else:
-                print("Invalid command. Please try again.")
-    
-    # Save the final list of categories
-    with open(category_file, 'w', encoding='utf-8') as f:
-        json.dump(categories, f, indent=4)
-    print("\nStep 1.3: Categories saved for next session.")
-    
+                for i, cat in enumerate(categories): print(f"[{i+1}] {cat}")
+            else: print("Invalid command.")
+
+    with open(category_file, 'w', encoding='utf-8') as f: json.dump(categories, f, indent=4)
+    print("\nStep 1.3: Categories saved.")
     return categories
 
-# --- Load Models ---
-print("\nStep 1: Loading summarization and classification models...")
-print("If this is the first time you are running the script, a large file download will begin now. Please wait for it to complete.")
+# --- Model and I/O Functions ---
+def initialize_models():
+    global summarizer, classifier
+    print("\nStep 1: Loading AI models...")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Device set to use {'GPU' if device == 'cuda' else 'CPU'}.")
+    summarizer = pipeline("summarization", model="t5-small", max_length=1024, device=device, framework="pt")
+    try:
+        classifier = pipeline("zero-shot-classification", model="MoritzLaurer/xtremedistil-l6-h256-zeroshot-v1.1-all-33", device=device, multi_label=True)
+        print("Step 1.1: Classification model loaded.")
+    except Exception as e:
+        print(f"{Fore.LIGHTBLACK_EX}WARNING: Error loading classification model: {e}{Style.RESET_ALL}"); classifier = None
 
-# Load the SMALLER summarization pipeline for speed
-summarizer = pipeline(
-    "summarization",
-    model="t5-small", 
-    max_length=1024, 
-    device=device,
-    framework="pt"  # Explicitly tell the pipeline to use PyTorch
-)
+def run_summarization_in_process(summarizer_pipeline, chunk, queue, max_len, min_len):
+    try:
+        summary = summarizer_pipeline(chunk, max_length=max_len, min_length=min_len, truncation=True)
+        queue.put(summary[0]['summary_text'])
+    except Exception as e:
+        queue.put(f"Summarization failed in subprocess: {e}")
 
-# Load a dedicated model for text classification
-try:
-    classifier = pipeline(
-        "zero-shot-classification",
-        model="MoritzLaurer/xtremedistil-l6-h256-zeroshot-v1.1-all-33",
-        device=device
-    )
-    print("Step 1.1: Classification model loaded successfully.")
-except Exception as e:
-    print(f"Error loading classification model: {e}")
-    classifier = None
-    print("Step 1.1: Falling back to 'Other' for all classifications.")
+# --- MODIFICATION START: Add chunk parsing function
+def parse_chunks(chunks_string, file_path, max_chunk_length):
+    """Parses a comma-separated string of chunks and ranges into a list of chunks."""
+    if not chunks_string.strip():
+        # Default to a single chunk if no specific chunks are provided
+        print(f"No chunks specified for {os.path.basename(file_path)}. Processing the first chunk.")
+        return [1]
 
+    chunks = set()
+    parts = chunks_string.split(',')
+    for part in parts:
+        part = part.strip()
+        if not part: continue
+        if '-' in part:
+            start_str, end_str = part.split('-')
+            start, end = int(start_str), int(end_str)
+            if start <= end:
+                chunks.update(range(start, end + 1))
+        else:
+            chunks.add(int(part))
+    return sorted(list(chunks))
+# --- MODIFICATION END ---
 
-# --- File Reading Functions ---
-def read_chunks_from_file(file_path, start_chunk, end_chunk, max_chunk_length):
-    """
-    Efficiently reads a specific range of word chunks from any file type.
-    It stops reading the file once the desired number of chunks has been collected.
-    """
+def read_chunks_from_file(file_path, chunk_numbers, max_chunk_length):
     ext = os.path.splitext(file_path)[1].lower()
-    words = []
-    total_words_needed = end_chunk * max_chunk_length
-
+    all_words = []
+    
     try:
         if ext == ".pdf":
             with fitz.open(file_path) as doc:
+                words = []
                 for page in doc:
                     words.extend(page.get_text().split())
-                    if len(words) >= total_words_needed:
-                        break
+                for chunk_num in chunk_numbers:
+                    start_index = (chunk_num - 1) * max_chunk_length
+                    end_index = start_index + max_chunk_length
+                    all_words.extend(words[start_index:end_index])
         elif ext == ".docx":
             doc = Document(file_path)
-            for para in doc.paragraphs:
-                words.extend(para.text.split())
-                if len(words) >= total_words_needed:
-                    break
+            words = []
+            for para in doc.paragraphs: words.extend(para.text.split())
+            for chunk_num in chunk_numbers:
+                start_index = (chunk_num - 1) * max_chunk_length
+                end_index = start_index + max_chunk_length
+                all_words.extend(words[start_index:end_index])
         elif ext == ".txt":
-            with open(file_path, "r", encoding="utf-8") as f:
-                # This is less efficient for huge txt files, but is the standard way
-                words = f.read().split()
+            with open(file_path, "r", encoding="utf-8") as f: words = f.read().split()
+            for chunk_num in chunk_numbers:
+                start_index = (chunk_num - 1) * max_chunk_length
+                end_index = start_index + max_chunk_length
+                all_words.extend(words[start_index:end_index])
         elif ext == ".xlsx":
-            sheets = pd.ExcelFile(file_path).sheet_names
-            for sheet in sheets:
+            words = []
+            for sheet in pd.ExcelFile(file_path).sheet_names:
                 df = pd.read_excel(file_path, sheet_name=sheet)
                 words.extend(df.to_string(index=False).split())
-                if len(words) >= total_words_needed:
-                    break
+            for chunk_num in chunk_numbers:
+                start_index = (chunk_num - 1) * max_chunk_length
+                end_index = start_index + max_chunk_length
+                all_words.extend(words[start_index:end_index])
         elif ext == ".pptx":
-            presentation = Presentation(file_path)
-            for slide in presentation.slides:
+            prs = Presentation(file_path)
+            words = []
+            for slide in prs.slides:
                 for shape in slide.shapes:
                     if shape.has_text_frame:
                         words.extend(shape.text.split())
-                        if len(words) >= total_words_needed:
-                            break
-                if len(words) >= total_words_needed:
-                    break
+            for chunk_num in chunk_numbers:
+                start_index = (chunk_num - 1) * max_chunk_length
+                end_index = start_index + max_chunk_length
+                all_words.extend(words[start_index:end_index])
     except Exception as e:
-        print(f"Error reading {ext} file: {e}")
-        return ""
+        print(f"{Fore.LIGHTBLACK_EX}WARNING: Error reading {ext} file: {e}{Style.RESET_ALL}"); return ""
+    return " ".join(all_words)
 
-    start_index = (start_chunk - 1) * max_chunk_length
-    end_index = end_chunk * max_chunk_length
-    
-    # Return the requested slice of words, joined back into a string
-    return " ".join(words[start_index:end_index])
 
-# --- Summarization Function ---
-def summarize_text(text, max_chunk_length, max_summary_length, min_summary_length):
-    """
-    Generates a summary from the provided text by processing it in word chunks.
-    """
-    if not text.strip():
-        return ["No text to summarize."]
-
+def summarize_text(text, max_chunk_length, max_summary_length, min_summary_length, timeout_seconds, show_verbiage):
+    if not text.strip(): return ["No text to summarize."]
     words = text.split()
     chunks = [" ".join(words[i:i + max_chunk_length]) for i in range(0, len(words), max_chunk_length)]
-    
     summaries = []
-    
     for i, chunk in enumerate(chunks):
+        if show_verbiage:
+            print(f"\n--- Chunk {i+1} Verbiage ---")
+            # --- MODIFICATION START: Colorize verbiage output
+            print(f"{Fore.MAGENTA}{chunk}{Style.RESET_ALL}")
+            # --- MODIFICATION END ---
+            print("----------------------------\n")
         print(f"Step 7.1.1: Summarizing chunk {i + 1} of {len(chunks)}...")
-        try:
-            summary = summarizer(
-                chunk, 
-                max_length=max_summary_length, 
-                min_length=min_summary_length, 
-                truncation=True
-            )
-            summaries.append(summary[0]['summary_text'])
-            print(f"Step 7.1.2: Summarization for chunk {i + 1} complete.")
-        except Exception as e:
-            print(f"Step 7.1.3: Error during summarization of chunk {i + 1}: {e}")
-            summaries.append("Summary failed for this chunk.")
-    
-    combined_summary = ". ".join(summaries)
-    return combined_summary.split(". ")
-    
-# --- Categorization Function ---
-def categorize_summary(summary_text, categories):
-    """
-    Categorizes a summary using a zero-shot classification model.
-    Returns the full results dictionary from the classifier.
-    """
-    if classifier is None:
-        return {'labels': ['Other'], 'scores': [1.0]}
+        q = multiprocessing.Queue()
+        p = multiprocessing.Process(target=run_summarization_in_process, args=(summarizer, chunk, q, max_summary_length, min_summary_length))
+        p.start()
+        p.join(timeout=timeout_seconds)
+        if p.is_alive():
+            print(f"{Fore.RED}Step 7.1.3: Summarization for chunk {i + 1} timed out after {timeout_seconds} seconds.")
+            p.terminate(); p.join()
+            summaries.append("Summary failed due to timeout.")
+        else:
+            try:
+                result = q.get(timeout=5)
+                summaries.append(result)
+                if show_verbiage:
+                    print(f"\n--- Summary for Chunk {i+1} ---")
+                    # --- MODIFICATION START: Colorize summary text output
+                    print(f"{Fore.MAGENTA}{result}{Style.RESET_ALL}")
+                    # --- MODIFICATION END ---
+                    print("------------------------------\n")
+                print(f"Step 7.1.2: Summarization for chunk {i + 1} complete.")
+            except Exception:
+                summaries.append("Summary failed to return result from process.")
+                print(f"{Fore.LIGHTBLACK_EX}WARNING: Error retrieving result for chunk {i + 1}.{Style.RESET_ALL}")
+    return ". ".join(summaries).split(". ")
 
+def categorize_summary(summary_text, categories):
+    if classifier is None: return {'labels': ['Other'], 'scores': [1.0]}
     print("Step 8.1: Sending summary to classifier model...")
     try:
-        results = classifier(summary_text, candidate_labels=categories)
-        print("Step 8.2: Categorization complete.")
+        results = classifier(summary_text, candidate_labels=categories, multi_label=True)
+        # --- MODIFICATION START: Colorize classifier output
+        print(f"{Fore.GREEN}Step 8.2: Categorization complete.{Style.RESET_ALL}")
+        # --- MODIFICATION END ---
         return results
     except Exception as e:
-        print(f"Step 8.3: Error during AI categorization: {e}")
-        return {'labels': ['Other'], 'scores': [1.0]}
+        print(f"{Fore.LIGHTBLACK_EX}WARNING: Error during AI categorization: {e}{Style.RESET_ALL}"); return {'labels': ['Other'], 'scores': [1.0]}
 
-# --- NEW: Pre-processing Function ---
-def preprocess_by_filename(file_list, categories, file_management_settings):
-    """
-    Scans filenames for category words and moves them before full processing.
-    Returns a list of files that were NOT moved.
-    """
-    print("\n--- Starting Pre-processing Step ---")
-    moved_files = set()
-    remaining_files = []
-    
+def tag_file_properties(file_path, primary_category, secondary_categories):
+    if not os.access(file_path, os.W_OK):
+        print(f"{Fore.RED}Tagging skipped: No write permission for '{os.path.basename(file_path)}'.")
+        return
+    ext = os.path.splitext(file_path)[1].lower()
+    if not os.path.exists(file_path):
+        print(f"{Fore.LIGHTBLACK_EX}WARNING: Tagging skipped: File not found at {file_path}{Style.RESET_ALL}"); return
+    keyword_parts = []
+    if primary_category and primary_category != "Other": keyword_parts.append(f"AILFO Primary:; {primary_category}")
+    for cat in secondary_categories: keyword_parts.append(f"2nd:; {cat}")
+    keyword_string = ":: ".join(keyword_parts)
+    if not keyword_string:
+        print(f"No valid categories to tag for {os.path.basename(file_path)}"); return
+    try:
+        obj = None
+        if ext == ".pdf":
+            doc = fitz.open(file_path)
+            doc.metadata["keywords"] = keyword_string
+            doc.save(file_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP); doc.close()
+        elif ext in [".docx", ".pptx", ".xlsx"]:
+            if ext == ".docx": obj = Document(file_path)
+            elif ext == ".pptx": obj = Presentation(file_path)
+            elif ext == ".xlsx": obj = load_workbook(file_path)
+            if ext != ".xlsx": obj.core_properties.keywords = keyword_string
+            else: obj.properties.keywords = keyword_string
+            obj.save(file_path)
+        else:
+            print(f"Tagging not supported for {ext} files."); return
+        print(f"{Fore.CYAN}Tagged '{os.path.basename(file_path)}' with: {keyword_string}")
+    except Exception as e:
+        print(f"{Fore.LIGHTBLACK_EX}WARNING: Error tagging file {os.path.basename(file_path)}: {e}{Style.RESET_ALL}")
+
+def create_shortcut(source_path, shortcut_path):
+    if sys.platform == "win32":
+        shortcut_path += ".url"
+        if os.path.exists(shortcut_path): return
+        with open(shortcut_path, "w") as f:
+            f.write(f"[InternetShortcut]\nURL=file:///{os.path.abspath(source_path)}\n")
+    else:
+        if os.path.lexists(shortcut_path): return
+        os.symlink(source_path, shortcut_path)
+
+def preprocess_by_filename(file_list, categories, file_action, output_folder_path, file_management_settings):
+    print("\n--- Starting Pre-processing Step (Filename Scan) ---")
+    remaining_files = list(file_list)
     for file_path in file_list:
         file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
-        cleaned_file_name = file_name_no_ext.replace('_', ' ').replace('-', ' ')
-        words_in_name = {word.lower() for word in cleaned_file_name.split()}
-        
+        words_in_name = {word.lower() for word in file_name_no_ext.replace('_', ' ').replace('-', ' ').split()}
         found_category = None
-        # --- CORRECTED: Improved matching logic for multi-word categories ---
-        for cat in categories: 
-            category_words = set(cat.lower().split())
-            if category_words.issubset(words_in_name):
-                found_category = cat
-                break # Found a match, stop searching
-        
-        if found_category and found_category in file_management_settings:
-            settings = file_management_settings[found_category]
-            prefix = settings['prefix']
-            destination_folder = settings['destination']
-            
+        for cat in categories:
+            if set(cat.lower().split()).issubset(words_in_name):
+                found_category = cat; break
+        if found_category:
+            sanitized_cat = sanitize_for_path(found_category)
+            destination_folder = os.path.join(output_folder_path, sanitized_cat)
             os.makedirs(destination_folder, exist_ok=True)
-
-            original_file_extension = os.path.splitext(file_path)[1]
-            original_file_name_no_ext = os.path.basename(os.path.splitext(file_path)[0])
+            prefix = file_management_settings.get(found_category, {}).get('prefix', '')
+            new_file_name = f"{prefix}_{file_name_no_ext}" if prefix else file_name_no_ext
             
-            if prefix:
-                new_file_name = f"{prefix}_{original_file_name_no_ext}{original_file_extension}"
+            destination_path = os.path.join(destination_folder, new_file_name)
+            
+            if file_action != 'shortcut':
+                destination_path_with_ext = destination_path + os.path.splitext(file_path)[1]
             else:
-                new_file_name = f"{original_file_name_no_ext}{original_file_extension}"
-
-            destination_file_path = os.path.join(destination_folder, new_file_name)
+                destination_path_with_ext = destination_path
             
             try:
-                shutil.move(file_path, destination_file_path)
-                print(f"Pre-processed and moved: {os.path.basename(file_path)} -> {destination_folder}")
-                moved_files.add(file_path)
-            except Exception as move_e:
-                print(f"Error pre-processing and moving {os.path.basename(file_path)}: {move_e}")
-                remaining_files.append(file_path) # If move fails, keep it for main processing
-        else:
-            remaining_files.append(file_path)
-
-    print(f"--- Pre-processing Complete: {len(moved_files)} files moved. ---")
+                if file_action == 'shortcut':
+                    create_shortcut(file_path, destination_path)
+                    print(f"{Fore.CYAN}Pre-processed shortcut for: {os.path.basename(file_path)} -> {destination_folder}")
+                else:
+                    if file_action == 'move':
+                        shutil.move(file_path, destination_path_with_ext)
+                        print(f"{Fore.CYAN}Pre-processed and moved: {os.path.basename(file_path)} -> {destination_folder}")
+                    elif file_action == 'copy':
+                        shutil.copy2(file_path, destination_path_with_ext)
+                        print(f"{Fore.CYAN}Pre-processed and copied: {os.path.basename(file_path)} -> {destination_folder}")
+                remaining_files.remove(file_path)
+            except Exception as e:
+                print(f"{Fore.LIGHTBLACK_EX}WARNING: Error pre-processing {os.path.basename(file_path)}: {e}{Style.RESET_ALL}")
+    print(f"--- Pre-processing Complete: {len(file_list) - len(remaining_files)} files processed. ---")
     return remaining_files
 
-
-# --- Main Processing Logic ---
-def process_files_in_folder(file_list, categories, pdf_padding, pdf_chunks, generic_padding, generic_chunks, file_management_settings, confidence_threshold, max_chunk_length, max_summary_length, min_summary_length):
-    """
-    Walks a folder, processes supported files, and generates summaries.
-    Includes detailed progress checks.
-    """
-    if not file_list:
-        print("\nNo remaining files to process after pre-processing step.")
-        return []
-
-    print(f"\nStep 4: Starting main processing for {len(file_list)} remaining files...")
-
+def process_files_in_folder(file_list, categories, file_management_settings, settings):
+    if not file_list: print("\nNo remaining files to process."); return []
+    print(f"\n--- Starting Main AI Processing for {len(file_list)} files... ---")
     all_summaries = []
-
     for i, file_path in enumerate(file_list):
-        print(f"\nStep 5: Processing file {i + 1}/{len(file_list)} - {os.path.basename(file_path)}")
-        
+        print(f"\n--- AI Processing file {i + 1}/{len(file_list)}: {os.path.basename(file_path)} ---")
+        if settings['file_action_choice'] != 'none':
+            file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
+            cleaned_file_name_for_skip = file_name_no_ext.replace('_', ' ').replace('-', ' ')
+            already_processed = False
+            for category in categories:
+                if category == "Other": continue
+                prefix = file_management_settings.get(category, {}).get('prefix', '')
+                new_file_name_no_ext = f"{prefix}_{cleaned_file_name_for_skip}" if prefix else cleaned_file_name_for_skip
+                if settings['file_action_choice'] == 'shortcut':
+                    expected_output_name = new_file_name_no_ext + ".url" if sys.platform == "win32" else new_file_name_no_ext
+                else:
+                    expected_output_name = new_file_name_no_ext + os.path.splitext(file_path)[1]
+                sanitized_cat = sanitize_for_path(category)
+                potential_dest_path = os.path.join(settings['output_folder_path'], sanitized_cat, expected_output_name)
+                if os.path.exists(potential_dest_path):
+                    print(f"Skipping: Output file '{expected_output_name}' appears to exist in '{sanitized_cat}' subfolder.")
+                    already_processed = True; break
+            if already_processed: continue
+
         is_pdf = os.path.splitext(file_path)[1].lower() == '.pdf'
+        is_text = os.path.splitext(file_path)[1].lower() == '.txt'
+        
+        # --- MODIFICATION START: Determine chunk settings based on file type and size
+        max_chunk_length = settings['generic_chunk_length']
+        chunks_list = []
         
         if is_pdf:
-            padding = pdf_padding
-            chunks_to_process = pdf_chunks
+            try:
+                with fitz.open(file_path) as doc:
+                    page_count = doc.page_count
+                    if page_count > settings['long_pdf_threshold']:
+                        max_chunk_length = settings['long_pdf_chunk_length']
+                        chunks_list = parse_chunks(settings['long_pdf_chunks_list'], file_path, max_chunk_length)
+                        print(f"Detected long PDF ({page_count} pages). Using long PDF settings.")
+                    else:
+                        max_chunk_length = settings['short_pdf_chunk_length']
+                        chunks_list = parse_chunks(settings['short_pdf_chunks_list'], file_path, max_chunk_length)
+                        print(f"Detected short PDF ({page_count} pages). Using short PDF settings.")
+            except Exception as e:
+                print(f"{Fore.LIGHTBLACK_EX}WARNING: Error getting PDF page count: {e}. Using default PDF settings.{Style.RESET_ALL}")
+                max_chunk_length = settings['pdf_chunk_length']
+                chunks_list = parse_chunks(settings['pdf_chunks_list'], file_path, max_chunk_length)
+        elif is_text:
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                    word_count = len(content.split())
+                    if word_count > settings['long_text_threshold']:
+                        max_chunk_length = settings['long_text_chunk_length']
+                        chunks_list = parse_chunks(settings['long_text_chunks_list'], file_path, max_chunk_length)
+                        print(f"Detected long text file ({word_count} words). Using long text settings.")
+                    else:
+                        max_chunk_length = settings['short_text_chunk_length']
+                        chunks_list = parse_chunks(settings['short_text_chunks_list'], file_path, max_chunk_length)
+                        print(f"Detected short text file ({word_count} words). Using short text settings.")
+            except Exception as e:
+                print(f"{Fore.LIGHTBLACK_EX}WARNING: Error counting words in text file: {e}. Using default text settings.{Style.RESET_ALL}")
+                max_chunk_length = settings['generic_chunk_length']
+                chunks_list = parse_chunks(settings['generic_chunks_list'], file_path, max_chunk_length)
         else:
-            padding = generic_padding
-            chunks_to_process = generic_chunks
-            
-        start_chunk = padding + 1
-        end_chunk = padding + chunks_to_process
+            max_chunk_length = settings['generic_chunk_length']
+            chunks_list = parse_chunks(settings['generic_chunks_list'], file_path, max_chunk_length)
+        # --- MODIFICATION END ---
+
+
+        # --- MODIFICATION START: Read specific chunks
+        if not chunks_list:
+            print(f"{Fore.LIGHTBLACK_EX}WARNING: No chunks specified for this file type and size. Skipping.{Style.RESET_ALL}")
+            continue
         
-        print(f"\nStep 6: Extracting from chunk(s) {start_chunk} to {end_chunk}...")
-        text = read_chunks_from_file(file_path, start_chunk, end_chunk, max_chunk_length)
+        chunk_string = ", ".join(map(str, chunks_list))
+        print(f"Step 6: Extracting from chunk(s): {chunk_string}...")
+        text = read_chunks_from_file(file_path, chunks_list, max_chunk_length)
+        if not text.strip():
+            print(f"{Fore.LIGHTBLACK_EX}WARNING: No text found in specified chunks, skipping.{Style.RESET_ALL}")
+            continue
+        print("Step 6.1: Text extracted successfully.")
+        # --- MODIFICATION END ---
+        
+        print("Step 7: Text extracted successfully. Starting summarization...")
 
-        if text.strip():
-            print("Step 7: Text extracted successfully. Starting summarization...")
-            bullet_points = summarize_text(text, max_chunk_length, max_summary_length, min_summary_length)
-            
-            if bullet_points and bullet_points != ["No text to summarize."]:
-                file_name_for_analysis = os.path.basename(file_path)
-                file_name_no_ext = os.path.splitext(file_name_for_analysis)[0]
-                cleaned_file_name = file_name_no_ext.replace('_', ' ').replace('-', ' ')
-                
-                all_chunks_for_classifier = [cleaned_file_name] + bullet_points
-                text_for_classifier = ". ".join(all_chunks_for_classifier)
-                
-                print("Step 8: Categorizing summary offline...")
-                results = categorize_summary(text_for_classifier, categories)
-                
-                top_score = results['scores'][0]
-                
-                if top_score * 100 >= confidence_threshold:
-                    top_category = results['labels'][0]
-                    other_categories = results['labels'][1:]
-                else:
-                    top_category = "Other"
-                    other_categories = results['labels']
-                    print(f"Top category '{results['labels'][0]}' with score {top_score*100:.2f}% is below threshold of {confidence_threshold}%. Assigning to 'Other'.")
-
-                print("Step 9: Final summary complete.")
-                
-                print(f"\nFile: {file_path}")
-                print("Summary:\n")
-                
-                print(f"Category: {Fore.GREEN}{Style.BRIGHT}{top_category} ({top_score*100:.2f}%)")
-                
-                summary_text_for_file = ""
-                for point in bullet_points:
-                    colorized_point = ""
-                    words_and_delimiters = re.split(r'([ ,.;:!?])', point)
-                    
-                    for word in words_and_delimiters:
-                        if word.lower() == top_category.lower():
-                            colorized_point += f"{Fore.GREEN}{Style.BRIGHT}{word}{Style.RESET_ALL}"
-                        elif word.lower() in [cat.lower() for cat in other_categories]:
-                            colorized_point += f"{Fore.YELLOW}{word}{Style.RESET_ALL}"
-                        else:
-                            colorized_point += word
-                    
-                    print(f"- {colorized_point.strip()}")
-                    summary_text_for_file += f"- {point.strip()}\n"
-                
-                colorized_filename = ""
-                filename_words_and_delimiters = re.split(r'([ ,.;:!?])', cleaned_file_name)
-                for word in filename_words_and_delimiters:
-                    if word.lower() == top_category.lower():
-                        colorized_filename += f"{Fore.GREEN}{Style.BRIGHT}{word}{Style.RESET_ALL}"
-                    elif word.lower() in [cat.lower() for cat in other_categories]:
-                        colorized_filename += f"{Fore.YELLOW}{word}{Style.RESET_ALL}"
+        max_summary_length_final = settings['max_summary_length']
+        min_summary_length_final = settings['min_summary_length']
+        if is_pdf:
+            try:
+                with fitz.open(file_path) as doc:
+                    page_count = doc.page_count
+                    if page_count > settings['long_pdf_threshold']:
+                        max_summary_length_final = settings['long_pdf_max_summary_length']
+                        min_summary_length_final = settings['long_pdf_min_summary_length']
                     else:
-                        colorized_filename += word
-                print(f"- {colorized_filename.strip()}")
-                
-                print("\n" + "-"*50)
+                        max_summary_length_final = settings['short_pdf_max_summary_length']
+                        min_summary_length_final = settings['short_pdf_min_summary_length']
+            except Exception as e:
+                print(f"{Fore.LIGHTBLACK_EX}WARNING: Error getting PDF page count: {e}. Using default summary settings.{Style.RESET_ALL}")
+        
+        bullet_points = summarize_text(text, max_chunk_length, max_summary_length_final, min_summary_length_final, settings['summarizer_timeout'], 
 
-                all_summaries.append({
-                    'file_path': os.path.abspath(file_path),
-                    'category': top_category,
-                    'summary': summary_text_for_file
-                })
+settings['show_chunk_verbiage'])
+        if not bullet_points or "Summary failed" in bullet_points[0]: print(f"{Fore.LIGHTBLACK_EX}WARNING: Summarization failed.{Style.RESET_ALL}"); 
 
-                if top_category in file_management_settings and file_management_settings[top_category].get('destination'):
-                    settings = file_management_settings[top_category]
-                    prefix = settings['prefix']
-                    destination_folder = settings['destination']
-                    
-                    os.makedirs(destination_folder, exist_ok=True)
+continue
 
-                    original_file_extension = os.path.splitext(file_path)[1]
-                    original_file_name_no_ext = os.path.basename(os.path.splitext(file_path)[0])
-                    
-                    if prefix:
-                        new_file_name = f"{prefix}_{original_file_name_no_ext}{original_file_extension}"
-                    else:
-                        new_file_name = f"{original_file_name_no_ext}{original_file_extension}"
+        print("\n--- Plain Text Summary ---")
+        summary_text_for_file = ""
+        # --- MODIFICATION START: Colorize the plain text summary output
+        for point in bullet_points:
+            p_strip = point.strip()
+            if p_strip:
+                print(f"{Fore.LIGHTGREEN_EX}- {p_strip}{Style.RESET_ALL}")
+                summary_text_for_file += f"- {p_strip}\n"
+        # --- MODIFICATION END ---
 
-                    destination_file_path = os.path.join(destination_folder, new_file_name)
-                    
-                    if os.path.exists(file_path):
-                        try:
-                            shutil.move(file_path, destination_file_path)
-                            print(f"Moved and renamed: {file_path} -> {destination_file_path}")
-                        except Exception as move_e:
-                            print(f"Error moving original file: {move_e}")
-            else:
-                print("Step 9.1: Skipping file - summarization failed.")
+        cleaned_file_name = os.path.splitext(os.path.basename(file_path))[0].replace('_', ' ').replace('-', ' ')
+        
+        # --- MODIFICATION START: Capture original category before it's potentially changed to "Other"
+        results = categorize_summary(". ".join([cleaned_file_name] + bullet_points), categories)
+        original_primary_category = results['labels'][0]
+        original_primary_score = results['scores'][0]
+        # --- MODIFICATION END ---
+        
+        primary_category, secondary_categories, all_valid_categories = "Other", [], []
+        if original_primary_score * 100 >= settings['confidence_threshold']:
+            primary_category = original_primary_category
+            all_valid_categories.append(primary_category)
+            for label, score in zip(results['labels'][1:], results['scores'][1:]):
+                if score * 100 >= settings['secondary_confidence_threshold']:
+                    secondary_categories.append((label, score))
+                    all_valid_categories.append(label)
+
+        print("Step 9: Final summary complete.")
+
+        if settings['tagging_enabled_choice'] in ['y', 'yes'] and all_valid_categories:
+            sec_cat_names = [cat for cat, score in secondary_categories]
+            tag_file_properties(file_path, primary_category, sec_cat_names)
+
+        print(f"\nFile: {file_path}")
+        
+        # --- MODIFICATION START: Show original and final category if changed
+        category_color = Fore.YELLOW if primary_category == "Other" else Fore.GREEN
+        if primary_category == "Other" and original_primary_category != "Other":
+            print(f"Primary Category: {category_color}{Style.BRIGHT}{primary_category} (was '{original_primary_category}' at 
+
+{original_primary_score*100:.2f}%)")
         else:
-            print("Step 9.1: Skipping file - no text found in the specified range.")
-    
-    print("\n--- Step 10: All supported files processed ---")
-    return all_summaries
+            print(f"Primary Category: {category_color}{Style.BRIGHT}{primary_category} ({results['scores'][0]*100:.2f}%)")
+        # --- MODIFICATION END ---
 
+        if secondary_categories:
+            colors = [Fore.CYAN, Fore.LIGHTGREEN_EX]
+            colored_cats = [f"{colors[i % 2]}{cat} ({Fore.YELLOW}{score*100:.2f}%)" for i, (cat, score) in enumerate(secondary_categories)]
+            print(f"Secondary Categories: {', '.join(colored_cats)}")
+
+        print(f"\n{Fore.CYAN}--- Colorized Summary ---{Style.RESET_ALL}")
+        if primary_category == "Other":
+            print(f"{Fore.MAGENTA}{summary_text_for_file}")
+            continue
+
+        sec_cat_map = {cat.lower(): i for i, (cat, score) in enumerate(secondary_categories)}
+        colors = [Fore.CYAN, Fore.LIGHTGREEN_EX]
+        for point in bullet_points:
+            p_strip = point.strip()
+            if not p_strip: continue
+            colorized_point = ""
+            words_and_delimiters = re.split(r'([ ,.;:!?])', p_strip)
+            for word in words_and_delimiters:
+                if word.lower() == primary_category.lower(): colorized_point += f"{Fore.GREEN}{Style.BRIGHT}{word}{Style.RESET_ALL}"
+                elif word.lower() in sec_cat_map:
+                    idx = sec_cat_map[word.lower()]
+                    color = colors[idx % 2]
+                    colorized_point += f"{color}{word}{Style.RESET_ALL}"
+                else: colorized_point += word
+            print(f"{Fore.LIGHTCYAN_EX}- {colorized_point}{Style.RESET_ALL}")
+            
+        all_summaries.append({'file_path': os.path.abspath(file_path), 'primary_category': primary_category, 'all_categories': all_valid_categories, 
+
+'summary': summary_text_for_file})
+
+        if settings['file_action_choice'] != 'none' and all_valid_categories:
+            for category in all_valid_categories:
+                sanitized_cat = sanitize_for_path(category)
+                destination_folder = os.path.join(settings['output_folder_path'], sanitized_cat)
+                os.makedirs(destination_folder, exist_ok=True)
+                prefix = file_management_settings.get(category, {}).get('prefix', '')
+                new_file_name = f"{prefix}_{cleaned_file_name}" if prefix else cleaned_file_name
+                
+                destination_path = os.path.join(destination_folder, new_file_name)
+                
+                if settings['file_action_choice'] != 'shortcut':
+                    destination_path_with_ext = destination_path + os.path.splitext(file_path)[1]
+                else:
+                    destination_path_with_ext = destination_path
+                
+                try:
+                    if settings['file_action_choice'] == 'shortcut':
+                        create_shortcut(file_path, destination_path)
+                        print(f"{Fore.CYAN}Created shortcut in -> {destination_folder}")
+                    elif category == primary_category:
+                        if settings['file_action_choice'] == 'move' and os.path.exists(file_path):
+                            shutil.move(file_path, destination_path_with_ext)
+                            print(f"{Fore.CYAN}Moved and renamed: {file_path} -> {destination_path_with_ext}")
+                            if settings['tagging_enabled_choice'] in ['y', 'yes']:
+                                sec_cat_names = [cat for cat, score in secondary_categories]
+                                tag_file_properties(destination_path_with_ext, primary_category, sec_cat_names)
+                        elif settings['file_action_choice'] == 'copy':
+                            shutil.copy2(file_path, destination_path_with_ext)
+                            print(f"{Fore.CYAN}Copied and renamed: {file_path} -> {destination_path_with_ext}")
+                            if settings['tagging_enabled_choice'] in ['y', 'yes']:
+                                sec_cat_names = [cat for cat, score in secondary_categories]
+                                tag_file_properties(destination_path_with_ext, primary_category, sec_cat_names)
+                except Exception as e: print(f"Error during file operation: {e}")
+    return all_summaries
 
 # --- Main Execution ---
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
+    initialize_models()
     try:
         CATEGORIES = load_and_edit_categories()
+        settings_file = "settings.json"
+        defaults = {
+            'pdf_chunk_length': 2048, 'generic_chunk_length': 250, 'max_summary_length': 150, 'min_summary_length': 40,
+            'pdf_padding': 0, 'pdf_chunks': 1, 'generic_padding': 0, 'generic_chunks': 1,
+            'confidence_threshold': 50, 'secondary_confidence_threshold': 20, 'tagging_enabled_choice': 'n',
+            'add_prefix_choice': 'n', 'global_prefix_choice': 'n', 'global_prefix': '', 'special_char': '',
+            'selected_file_types': ['.pdf', '.docx', '.txt', '.xlsx', '.pptx'], 'file_action_choice': 'none',
+            'last_list_file': '', 'last_destination_folder': '', 'source_choice': 'f', 'preprocess_choice': 'n',
+            'summarizer_timeout': 60,
+            'long_pdf_threshold': 10,
+            'long_text_threshold': 1000,
+            'short_pdf_chunk_length': 1025,
+            'long_pdf_chunk_length': 4096,
+            'short_text_chunk_length': 1025,
+            'long_text_chunk_length': 4096,
+            'long_pdf_max_summary_length': 200,
+            'long_pdf_min_summary_length': 50,
+            'short_pdf_max_summary_length': 150,
+            'short_pdf_min_summary_length': 40,
+            'short_pdf_chunks_list': '',
+            'long_pdf_chunks_list': '',
+            'short_text_chunks_list': '',
+            'long_text_chunks_list': '',
+            'generic_chunks_list': '',
+            'show_chunk_verbiage': 'n'
+        }
 
-        while True:
-            folder_path = input("Enter the folder path containing the files: ").strip()
-            if os.path.isdir(folder_path):
-                break
-            print("\nError: The provided path is not a valid directory. Please try again.")
+        if os.path.exists(settings_file):
+            if input("Found saved settings. Load them? (y/n) [default: y]: ").strip().lower() not in ['n', 'no']:
+                try:
+                    with open(settings_file, 'r') as f: defaults.update(json.load(f))
+                    print("Settings loaded successfully.")
+                except Exception as e: print(f"Error loading settings: {e}.")
 
-        scan_sub_input = input("Scan subdirectories? (y/n) [default: n]: ").strip().lower()
-        scan_subdirectories = scan_sub_input in ['y', 'yes']
+        settings_to_save = defaults.copy()
 
-        # --- NEW: Configuration Settings Prompts ---
+        source_choice = input(f"Process files from a [f]older or a [l]ist file? [default: {settings_to_save['source_choice']}]: ").strip().lower() or 
+
+settings_to_save['source_choice']
+
+        initial_file_list, output_folder_path, list_file_path = [], "", settings_to_save.get('last_list_file', '')
+        last_destination_folder = settings_to_save.get('last_destination_folder', '')
+
+        if source_choice == 'f':
+            folder_path = input("Enter the folder path to scan: ").strip()
+            dest_choice = input("Send organized files to [s]ubdirectory or [d]efined location?: ").strip().lower()
+            output_folder_path = folder_path if dest_choice == 's' else (input(f"Enter the destination folder path [default: {last_destination_folder}]: 
+
+").strip() or last_destination_folder)
+            scan_sub = input("Scan subdirectories of the source folder? (y/n) [default: n]: ").strip().lower() in ['y', 'yes']
+
+            walk_target = os.walk(folder_path) if scan_sub else [(os.path.dirname(folder_path) if folder_path else '.', [], os.listdir(folder_path or 
+
+'.'))]
+            for root, _, files in walk_target:
+                for file in files:
+                    if os.path.splitext(file)[1].lower() in settings_to_save['selected_file_types']: initial_file_list.append(os.path.join(root, file))
+        elif source_choice == 'l':
+            list_file_path = input(f"Enter path to the list file [default: {list_file_path}]: ").strip() or list_file_path
+            output_folder_path = input(f"Enter a destination folder path [default: {last_destination_folder}]: ").strip() or last_destination_folder
+            with open(list_file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    file_path = line.strip()
+                    if os.path.isfile(file_path) and os.path.splitext(file_path)[1].lower() in settings_to_save['selected_file_types']: 
+
+initial_file_list.append(file_path)
+
+        if not os.path.isdir(output_folder_path): os.makedirs(output_folder_path, exist_ok=True)
+        settings_to_save['output_folder_path'] = output_folder_path
+
+        action_map = {'m': 'move', 'c': 'copy', 's': 'shortcut', 'd': 'none'}
+        action_input = input(f"Action: [M]ove, [C]opy, create [S]hortcut, or [D]o nothing? [default: {settings_to_save['file_action_choice']}]: ").strip
+
+().lower()
+        settings_to_save['file_action_choice'] = action_map.get(action_input, settings_to_save['file_action_choice'] if not action_input else 'none')
+        settings_to_save['preprocess_choice'] = input(f"Pre-process by filename? (y/n) [default: {settings_to_save['preprocess_choice']}]: ").strip
+
+().lower() or settings_to_save['preprocess_choice']
+
         print("\n--- Configuration Settings ---")
-        while True:
-            try:
-                chunk_len_input = input("Enter chunk length (words per chunk, default: 30): ").strip()
-                max_chunk_length_to_use = int(chunk_len_input) if chunk_len_input else 30
-                if max_chunk_length_to_use > 0:
-                    break
-                else:
-                    print("Please enter a number greater than 0.")
-            except ValueError:
-                print("Invalid input. Please enter a valid number.")
+        settings_to_save['summarizer_timeout'] = int(input(f"Enter summarizer timeout in seconds [default: {settings_to_save['summarizer_timeout']}]: 
+
+").strip() or settings_to_save['summarizer_timeout'])
+        settings_to_save['confidence_threshold'] = int(input(f"Enter primary confidence threshold (0-100) [default: {settings_to_save
+
+['confidence_threshold']}]: ").strip() or settings_to_save['confidence_threshold'])
+        settings_to_save['secondary_confidence_threshold'] = int(input(f"Enter secondary confidence threshold (0-100) [default: {settings_to_save
+
+['secondary_confidence_threshold']}]: ").strip() or settings_to_save['secondary_confidence_threshold'])
+
+        settings_to_save['generic_chunk_length'] = int(input(f"Enter non-PDF chunk length [default: {settings_to_save['generic_chunk_length']}]: ").strip
+
+() or settings_to_save['generic_chunk_length'])
+        settings_to_save['short_pdf_chunk_length'] = int(input(f"Enter SHORT PDF chunk length [default: {settings_to_save.get('short_pdf_chunk_length', 
+
+defaults['short_pdf_chunk_length'])}]: ").strip() or settings_to_save.get('short_pdf_chunk_length', defaults['short_pdf_chunk_length']))
+        settings_to_save['long_pdf_chunk_length'] = int(input(f"Enter LONG PDF chunk length [default: {settings_to_save.get('long_pdf_chunk_length', 
+
+defaults['long_pdf_chunk_length'])}]: ").strip() or settings_to_save.get('long_pdf_chunk_length', defaults['long_pdf_chunk_length']))
         
-        while True:
-            try:
-                max_sum_input = input("Enter max summary length (words, default: 10): ").strip()
-                max_summary_length_to_use = int(max_sum_input) if max_sum_input else 10
-                if max_summary_length_to_use > 0:
-                    break
-                else:
-                    print("Please enter a number greater than 0.")
-            except ValueError:
-                print("Invalid input. Please enter a valid number.")
+        settings_to_save['max_summary_length'] = int(input(f"Enter SHORT PDF max summary length [default: {settings_to_save['max_summary_length']}]: 
 
-        while True:
-            try:
-                min_sum_input = input("Enter min summary length (words, default: 4): ").strip()
-                min_summary_length_to_use = int(min_sum_input) if min_sum_input else 4
-                if min_summary_length_to_use > 0 and min_summary_length_to_use <= max_summary_length_to_use:
-                    break
-                else:
-                    print(f"Please enter a number greater than 0 and no more than {max_summary_length_to_use}.")
-            except ValueError:
-                print("Invalid input. Please enter a valid number.")
+").strip() or settings_to_save['max_summary_length'])
+        settings_to_save['min_summary_length'] = int(input(f"Enter SHORT PDF min summary length [default: {settings_to_save['min_summary_length']}]: 
 
-        # --- CORRECTED: Independent and clear prompts ---
-        print(f"\n--- PDF Settings (in {max_chunk_length_to_use}-word chunks) ---")
-        while True:
-            try:
-                padding_input = input("Enter number of initial chunks to skip (padding, default: 0): ").strip()
-                pdf_padding_to_use = int(padding_input) if padding_input else 0
-                if pdf_padding_to_use >= 0:
-                    break
-                else:
-                    print("Please enter a non-negative number.")
-            except ValueError:
-                print("Invalid input. Please enter a valid number.")
+").strip() or settings_to_save['min_summary_length'])
+        settings_to_save['long_pdf_threshold'] = int(input(f"Enter the LONG PDF threshold (in pages) [default: {settings_to_save['long_pdf_threshold']}]: 
+
+").strip() or settings_to_save['long_pdf_threshold'])
+        settings_to_save['long_pdf_max_summary_length'] = int(input(f"Enter LONG PDF max summary length [default: {settings_to_save
+
+['long_pdf_max_summary_length']}]: ").strip() or settings_to_save['long_pdf_max_summary_length'])
+        settings_to_save['long_pdf_min_summary_length'] = int(input(f"Enter LONG PDF min summary length [default: {settings_to_save
+
+['long_pdf_min_summary_length']}]: ").strip() or settings_to_save['long_pdf_min_summary_length'])
         
-        while True:
-            try:
-                chunks_input = input("Enter number of chunks to process after padding: ").strip()
-                pdf_chunks_to_use = int(chunks_input)
-                if pdf_chunks_to_use > 0:
-                    break
-                else:
-                    print("Please enter a number greater than 0.")
-            except ValueError:
-                print("Invalid input. Please enter a valid number.")
+        settings_to_save['tagging_enabled_choice'] = input(f"Tag files with category keywords? (y/n) [default: {settings_to_save
 
-        print(f"\n--- Settings for Other File Types (in {max_chunk_length_to_use}-word chunks) ---")
-        while True:
-            try:
-                padding_input = input("Enter number of initial chunks to skip (padding, default: 0): ").strip()
-                generic_padding_to_use = int(padding_input) if padding_input else 0
-                if generic_padding_to_use >= 0:
-                    break
-                else:
-                    print("Please enter a non-negative number.")
-            except ValueError:
-                print("Invalid input. Please enter a valid number.")
+['tagging_enabled_choice']}]: ").strip().lower() or settings_to_save['tagging_enabled_choice']
 
-        while True:
-            try:
-                chunks_input = input("Enter number of chunks to process after padding: ").strip()
-                generic_chunks_to_use = int(chunks_input)
-                if generic_chunks_to_use > 0:
-                    break
-                else:
-                    print("Please enter a number greater than 0.")
-            except ValueError:
-                print("Invalid input. Please enter a valid number.")
+        print("\n--- Chunk Selection (comma-separated list/ranges) ---")
+        settings_to_save['short_pdf_chunks_list'] = input(f"Enter chunks for SHORT PDFs (e.g., '1, 3-5') [default: {settings_to_save.get
+
+('short_pdf_chunks_list', '')}]: ").strip() or settings_to_save.get('short_pdf_chunks_list', '')
+        settings_to_save['long_pdf_chunks_list'] = input(f"Enter chunks for LONG PDFs (e.g., '1-2, 10') [default: {settings_to_save.get
+
+('long_pdf_chunks_list', '')}]: ").strip() or settings_to_save.get('long_pdf_chunks_list', '')
+        settings_to_save['short_text_chunks_list'] = input(f"Enter chunks for SHORT text files (e.g., '1') [default: {settings_to_save.get
+
+('short_text_chunks_list', '')}]: ").strip() or settings_to_save.get('short_text_chunks_list', '')
+        settings_to_save['long_text_chunks_list'] = input(f"Enter chunks for LONG text files (e.g., '1-5') [default: {settings_to_save.get
+
+('long_text_chunks_list', '')}]: ").strip() or settings_to_save.get('long_text_chunks_list', '')
+        settings_to_save['long_text_threshold'] = int(input(f"Enter the LONG TEXT threshold (in words) [default: {settings_to_save
+
+['long_text_threshold']}]: ").strip() or settings_to_save['long_text_threshold'])
+        settings_to_save['short_text_chunk_length'] = int(input(f"Enter SHORT text chunk length [default: {settings_to_save['short_text_chunk_length']}]: 
+
+").strip() or settings_to_save['short_text_chunk_length'])
+        settings_to_save['long_text_chunk_length'] = int(input(f"Enter LONG text chunk length [default: {settings_to_save['long_text_chunk_length']}]: 
+
+").strip() or settings_to_save['long_text_chunk_length'])
         
-        # --- NEW: Confidence Threshold Prompt ---
-        while True:
-            try:
-                threshold_input = input("\nEnter confidence threshold (0-100, default: 0): ").strip()
-                confidence_threshold_to_use = int(threshold_input) if threshold_input else 0
-                if 0 <= confidence_threshold_to_use <= 100:
-                    break
-                else:
-                    print("Please enter a number between 0 and 100.")
-            except ValueError:
-                print("Invalid input. Please enter a valid number.")
+        current_show_verbiage = settings_to_save.get('show_chunk_verbiage', 'n')
+        settings_to_save['show_chunk_verbiage'] = input(f"Show extraction and summary text for each chunk? (y/n) [default: {current_show_verbiage}]: 
 
+").strip().lower() or current_show_verbiage
+        
+        if settings_to_save['file_action_choice'] != 'none':
+            settings_to_save['add_prefix_choice'] = input(f"Add a prefix to organized files? (y/n) [default: {settings_to_save['add_prefix_choice']}]: 
+
+").strip().lower() or settings_to_save['add_prefix_choice']
+            if settings_to_save['add_prefix_choice'] in ['y', 'yes']:
+                settings_to_save['global_prefix_choice'] = input(f"Apply a global prefix? (y/n) [default: {settings_to_save['global_prefix_choice']}]: 
+
+").strip().lower() or settings_to_save['global_prefix_choice']
+                if settings_to_save['global_prefix_choice'] in ['y', 'yes']:
+                    settings_to_save['global_prefix'] = input(f"Enter a global prefix (max 12 chars) [default: {settings_to_save['global_prefix']}]: 
+
+").strip() or settings_to_save['global_prefix']
+                    settings_to_save['special_char'] = input(f"Enter a special character (1-3 chars) [default: {settings_to_save['special_char']}]: 
+
+").strip() or settings_to_save['special_char']
+
+        settings_to_save['source_choice'] = source_choice
+        settings_to_save['last_destination_folder'] = output_folder_path
+        if source_choice == 'l': settings_to_save['last_list_file'] = list_file_path
+        with open(settings_file, 'w') as f: json.dump(settings_to_save, f, indent=4)
+        print("\nSettings saved. Starting process...")
 
         file_management_settings = {}
-        move_files_choice = input("\nAutomatically move all categorized files into subdirectories? (y/n) [default: n]: ").strip().lower()
+        if settings_to_save['file_action_choice'] != 'none' and output_folder_path:
+            for category in CATEGORIES:
+                if category != "Other":
+                    prefix_str = ""
+                    if settings_to_save['add_prefix_choice'] in ['y', 'yes']:
+                        if settings_to_save['global_prefix_choice'] in ['y', 'yes']: prefix_str = f"{settings_to_save['global_prefix']}{settings_to_save
 
-        if move_files_choice in ['y', 'yes']:
-            add_prefix_choice = input("Add a prefix to moved files? (y/n) [default: n]: ").strip().lower()
-            
-            if add_prefix_choice in ['y', 'yes']:
-                global_prefix_choice = input("Apply a global prefix to all moved files? (y/n) [default: n]: ").strip().lower()
-                
-                if global_prefix_choice in ['y', 'yes']:
-                    global_prefix = ""
-                    while True:
-                        global_prefix = input("Enter a prefix (max 12 characters) for all files: ").strip()
-                        if len(global_prefix) <= 12:
-                            break
-                        else:
-                            print(f"The prefix must be 12 characters or less. Please try again.")
-                    
-                    special_char = ""
-                    while True:
-                        special_char = input("Enter a special character to follow the prefix (1 to 3 characters): ").strip()
-                        if 1 <= len(special_char) <= 3:
-                            break
-                        else:
-                            print("Please enter 1 to 3 special characters.")
-                    
-                    for category in CATEGORIES:
-                        if category != "Other":
-                            file_management_settings[category] = {
-                                'prefix': f"{global_prefix}{special_char}",
-                                'destination': os.path.join(folder_path, category)
-                            }
-                else:
-                    print("Using default prefixes for moved files.")
-                    for category in CATEGORIES:
-                        if category != "Other":
-                            file_management_settings[category] = {
-                                'prefix': category.replace(' ', '')[:12].upper(),
-                                'destination': os.path.join(folder_path, category)
-                            }
-            else:
-                print("Files will be moved without a prefix.")
-                for category in CATEGORIES:
-                    if category != "Other":
-                        file_management_settings[category] = {
-                            'prefix': '',
-                            'destination': os.path.join(folder_path, category)
-                        }
-            
-            # --- MODIFIED: Always create a rule for the "Other" category if moving is enabled ---
-            print("Files categorized as 'Other' will be moved to an 'Other' folder.")
-            file_management_settings["Other"] = {
-                'prefix': '', # No prefix for the 'Other' category
-                'destination': os.path.join(folder_path, "Other")
-            }
-        else:
-            print("Categorized files will not be moved.")
+['special_char']}"
+                        else: prefix_str = sanitize_for_path(category).replace(' ', '')[:12].upper()
+                    file_management_settings[category] = {'prefix': prefix_str, 'destination': os.path.join(output_folder_path, sanitize_for_path
 
-        # --- NEW: Pre-processing Step Integration ---
-        preprocess_choice = input("\nPre-process files by moving them based on filename? (y/n) [default: n]: ").strip().lower()
-        
-        # Initial scan for all files
-        print("\nScanning for files... This may take a moment for large directories.")
-        supported_extensions = [".pdf", ".docx", ".txt", ".xlsx", ".pptx"]
-        initial_file_list = []
-        if scan_subdirectories:
-            for root, _, files in os.walk(folder_path):
-                for file in files:
-                    if os.path.splitext(file)[1].lower() in supported_extensions:
-                        initial_file_list.append(os.path.join(root, file))
-        else:
-            for file in os.listdir(folder_path):
-                file_path = os.path.join(folder_path, file)
-                if os.path.isfile(file_path) and os.path.splitext(file)[1].lower() in supported_extensions:
-                    initial_file_list.append(file_path)
+(category))}
 
         files_to_process = initial_file_list
-        if preprocess_choice in ['y', 'yes']:
-            if move_files_choice in ['y', 'yes']:
-                 files_to_process = preprocess_by_filename(initial_file_list, CATEGORIES, file_management_settings)
-            else:
-                print("Cannot pre-process because file moving is disabled. Skipping.")
+        if settings_to_save['preprocess_choice'] in ['y', 'yes'] and settings_to_save['file_action_choice'] != 'none':
+            files_to_process = preprocess_by_filename(initial_file_list, CATEGORIES, settings_to_save['file_action_choice'], output_folder_path, 
 
+file_management_settings)
 
-        print("\nStep 11: Folder path is valid. Starting the batch process...")
-        
-        all_summaries = process_files_in_folder(files_to_process, CATEGORIES, pdf_padding_to_use, pdf_chunks_to_use, generic_padding_to_use, generic_chunks_to_use, file_management_settings, confidence_threshold_to_use, max_chunk_length_to_use, max_summary_length_to_use, min_summary_length_to_use)
+        all_summaries = process_files_in_folder(files_to_process, CATEGORIES, file_management_settings, settings_to_save)
 
-        if all_summaries:
-            print("\n--- Saving all summaries to a single file ---")
-            consolidated_summary_file = os.path.join(folder_path, "all_summaries.txt")
-            with open(consolidated_summary_file, "w", encoding="utf-8") as f:
-                for summary_data in all_summaries:
+        if all_summaries and output_folder_path:
+            summary_file_path = os.path.join(output_folder_path, "all_summaries.txt")
+            with open(summary_file_path, "w", encoding="utf-8") as f:
+                for summary in all_summaries:
                     f.write("="*50 + "\n")
-                    f.write(f"File: {summary_data['file_path']}\n")
-                    f.write(f"Category: {summary_data['category']}\n\n")
-                    f.write(f"Summary:\n{summary_data['summary']}\n")
-            print(f"All summaries consolidated into: {consolidated_summary_file}")
-            
+                    f.write(f"File: {summary['file_path']}\n")
+                    f.write(f"Primary Category: {summary['primary_category']}\n")
+                    if len(summary['all_categories']) > 1: f.write(f"All Categories: {', '.join(summary['all_categories'])}\n")
+                    f.write(f"\nSummary:\n{summary['summary']}\n")
+            print(f"Summaries saved to: {summary_file_path}")
+
     except KeyboardInterrupt:
-        print("\nProcess interrupted by user. Exiting gracefully.")
+        print("\nProcess interrupted.")
+    except Exception as e:
+        print(f"\nAn unexpected error occurred: {e}")
