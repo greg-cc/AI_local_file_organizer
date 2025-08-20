@@ -17,7 +17,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import shutil
 import json
 import colorama
-from colorama import Fore, Style
+from colorama import Fore, Back, Style
 import re
 import multiprocessing
 
@@ -29,6 +29,9 @@ DARK_BROWN = '\033[38;2;101;67;33m'
 
 # Set global output line limit
 MAX_OUTPUT_LINES = 5
+MAX_LINE_WIDTH = 120
+MAX_VERBIAGE_CHARS = 220
+MAX_VERBIAGE_LINES = 5
 
 # --- Global Variables for Models ---
 summarizer = None
@@ -232,19 +235,32 @@ def summarize_text(text, max_chunk_length, max_summary_length, min_summary_lengt
             display_text = '\n'.join(processed_lines[:MAX_OUTPUT_LINES])
             
             print(f"\n{Fore.MAGENTA}--- Chunk {i+1} Verbiage ---{Style.RESET_ALL}")
-            print(f"{Fore.MAGENTA}{display_text}{Style.RESET_ALL}")
+            lines_to_display = display_text.split('\n')
+            
+            for line_idx, line in enumerate(lines_to_display):
+                if line_idx >= MAX_VERBIAGE_LINES:
+                    print(f"{Fore.MAGENTA}...{Style.RESET_ALL}")
+                    break
+                
+                wrapped_line = '\n'.join([line[j:j+MAX_LINE_WIDTH] for j in range(0, len(line), MAX_LINE_WIDTH)])
+                
+                if len(wrapped_line) > MAX_VERBIAGE_CHARS:
+                    wrapped_line = wrapped_line[:MAX_VERBIAGE_CHARS] + "..."
+                
+                print(f"{Fore.MAGENTA}{wrapped_line}{Style.RESET_ALL}")
+                
             print(f"{Fore.MAGENTA}------------------------------{Style.RESET_ALL}\n")
 
         print(f"{Fore.CYAN}Step 7.1: Text ready. Starting summarization...{Style.RESET_ALL}")
 
         chunk_lines = chunk.split('\n')
         print(f"{Fore.CYAN}Step 7.1.1: Summarizing chunk {i + 1} of {len(chunks)}...{Style.RESET_ALL}")
-        # New logic to enforce 5 line output limit here
         for line_idx, line in enumerate(chunk_lines):
             if line_idx >= MAX_OUTPUT_LINES:
                 print(f"{Fore.CYAN}...{Style.RESET_ALL}")
                 break
-            print(f"{Fore.CYAN}{line.strip()}{Style.RESET_ALL}")
+            wrapped_line = '\n'.join([line[j:j+MAX_LINE_WIDTH] for j in range(0, len(line), MAX_LINE_WIDTH)])
+            print(f"{Fore.CYAN}{wrapped_line}{Style.RESET_ALL}")
 
         q = multiprocessing.Queue()
         p = multiprocessing.Process(target=run_summarization_in_process, args=(summarizer, chunk, q, max_summary_length, min_summary_length))
@@ -260,7 +276,16 @@ def summarize_text(text, max_chunk_length, max_summary_length, min_summary_lengt
                 summaries.append(result)
                 if show_verbiage:
                     print(f"\n{Fore.MAGENTA}--- Summary for Chunk {i+1} ---{Style.RESET_ALL}")
-                    print(f"{Fore.MAGENTA}{result}{Style.RESET_ALL}")
+                    lines_to_display = result.split('\n')
+                    
+                    for line_idx, line in enumerate(lines_to_display):
+                        if line_idx >= MAX_OUTPUT_LINES:
+                            print(f"{Fore.MAGENTA}...{Style.RESET_ALL}")
+                            break
+                        wrapped_line = '\n'.join([line[j:j+MAX_LINE_WIDTH] for j in range(0, len(line), MAX_LINE_WIDTH)])
+                        if len(wrapped_line) > MAX_VERBIAGE_CHARS:
+                            wrapped_line = wrapped_line[:MAX_VERBIAGE_CHARS] + "..."
+                        print(f"{Fore.MAGENTA}{wrapped_line}{Style.RESET_ALL}")
                     print(f"{Fore.MAGENTA}------------------------------{Style.RESET_ALL}\n")
                 print(f"{Fore.CYAN}Step 7.1.2: Summarization for chunk {i + 1} complete.{Style.RESET_ALL}")
             except Exception:
@@ -307,10 +332,9 @@ def tag_file_properties(file_path, primary_category, secondary_categories):
         else:
             print(f"{Fore.LIGHTBLACK_EX}Tagging not supported for {ext} files.{Style.RESET_ALL}"); return
         
-        # New coloring logic for "Tagged" verbiage
-        colored_output = f"{DARK_BROWN}Tagged '{os.path.basename(file_path)}' with: {keyword_string.replace('2nd:;', f'{Fore.YELLOW}2nd:;{DARK_BROWN}')}
+        colored_output = f"{Back.BLACK}{Fore.WHITE}Tagged '{os.path.basename(file_path)}' with: {keyword_string.replace('2nd:;', f'{Fore.YELLOW}2nd:;
 
-{Style.RESET_ALL}"
+{Fore.WHITE}')}{Style.RESET_ALL}"
         print(colored_output)
     except Exception as e:
         print(f"{Fore.LIGHTBLACK_EX}WARNING: Error tagging file {os.path.basename(file_path)}: {e}{Style.RESET_ALL}")
@@ -406,25 +430,22 @@ def cull_to_complete_sentences(text):
 def process_single_file(task_data):
     file_path, file_path_index, total_files, categories, file_management_settings, settings = task_data
     
-    # Corrected line to color the filename red
     print(f"\n{Fore.CYAN}--- AI Processing file {file_path_index + 1}/{total_files}: {Fore.LIGHTRED_EX}{os.path.basename(file_path)}{Style.RESET_ALL}
 
 {Fore.CYAN} ---{Style.RESET_ALL}")
     
-    # Initialize text_to_summarize to an empty string to prevent NameError
     text_to_summarize = ""
 
-    # Check for negative keywords/regex before doing any heavy lifting
     text_preview = read_entire_file(file_path)
     
-    # Check for "unreadable file" error before proceeding
     if text_preview == "__READ_ERROR__":
         special_category = "unreadable file"
         sanitized_cat = sanitize_for_path(special_category)
         destination_folder = os.path.join(settings['output_folder_path'], sanitized_cat)
         os.makedirs(destination_folder, exist_ok=True)
         
-        cleaned_file_name = os.path.splitext(os.path.basename(file_path))[0].replace('_', ' ').replace('-', ' ')
+        file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
+        cleaned_file_name = file_name_no_ext.replace('_', ' ').replace('-', ' ')
         
         if settings['file_action_choice'] == 'shortcut':
             destination_path_with_ext = os.path.join(destination_folder, cleaned_file_name) + ".url"
@@ -451,7 +472,7 @@ subfolder.{Style.RESET_ALL}")
                 print(f"{Fore.CYAN}Copied and renamed: {file_path} -> {destination_path_with_ext}{Style.RESET_ALL}")
         except Exception as e:
             print(f"{Fore.LIGHTBLACK_EX}Error during file operation for '{special_category}': {e}{Style.RESET_ALL}")
-            
+
         return {'file_path': os.path.abspath(file_path), 'primary_category': special_category, 'all_categories': [special_category], 'summary': 'File 
 
 could not be read due to format error.'}
@@ -461,7 +482,8 @@ could not be read due to format error.'}
         sanitized_cat = sanitize_for_path(special_category)
         destination_folder = os.path.join(settings['output_folder_path'], sanitized_cat)
         
-        cleaned_file_name = os.path.splitext(os.path.basename(file_path))[0].replace('_', ' ').replace('-', ' ')
+        file_name_no_ext = os.path.splitext(os.path.basename(file_path))[0]
+        cleaned_file_name = file_name_no_ext.replace('_', ' ').replace('-', ' ')
         if settings['file_action_choice'] == 'shortcut':
             destination_path_with_ext = os.path.join(destination_folder, cleaned_file_name) + ".url"
         else:
@@ -532,7 +554,7 @@ found in file.'}
             sanitized_cat = sanitize_for_path(category)
             potential_dest_path = os.path.join(settings['output_folder_path'], sanitized_cat, expected_output_name)
             if os.path.exists(potential_dest_path):
-                print(f"{Fore.LIGHTBLACK_EX}Skipping: Output file '{expected_output_name}' appears to exist in '{sanitized_cat}' subfolder.
+                print(f"{Fore.LIGHTBLACK_EX}Skipping pre-filtered: '{os.path.basename(file_path)}' found in '{sanitize_for_path(category)}' subfolder.
 
 {Style.RESET_ALL}")
                 already_processed = True; break
@@ -595,7 +617,6 @@ found in file.'}
     
     print(f"{Fore.CYAN}Step 7: Pre-processing text for summarization...{Style.RESET_ALL}")
     
-    # New logic to format raw text verbiage
     if settings['show_chunk_verbiage'].lower() == 'y':
         raw_lines = text.split('\n')
         processed_lines = []
@@ -621,13 +642,30 @@ found in file.'}
         display_text = '\n'.join(processed_lines[:MAX_OUTPUT_LINES])
         
         print(f"\n{Fore.MAGENTA}--- Raw Text Verbiage ({len(text.split())} words) ---{Style.RESET_ALL}")
-        print(f"{Fore.MAGENTA}{display_text}{Style.RESET_ALL}")
+        lines_to_display = display_text.split('\n')
+        
+        for line_idx, line in enumerate(lines_to_display):
+            if line_idx >= MAX_VERBIAGE_LINES:
+                print(f"{Fore.MAGENTA}...{Style.RESET_ALL}")
+                break
+            
+            wrapped_line = '\n'.join([line[j:j+MAX_LINE_WIDTH] for j in range(0, len(line), MAX_LINE_WIDTH)])
+            
+            if len(wrapped_line) > MAX_VERBIAGE_CHARS:
+                wrapped_line = wrapped_line[:MAX_VERBIAGE_CHARS] + "..."
+            
+            filter_keywords = [k.strip().lower() for k in settings.get('filter_keywords', '').split(',') if k.strip()]
+            for keyword in filter_keywords:
+                wrapped_line = re.sub(r'(?i)\b' + re.escape(keyword) + r'\b', f"{Fore.YELLOW}{Style.BRIGHT}\\g<0>{Fore.MAGENTA}{Style.NORMAL}", 
+
+wrapped_line)
+            print(f"{Fore.MAGENTA}{wrapped_line}{Style.RESET_ALL}")
+            
         print(f"{Fore.MAGENTA}------------------------------{Style.RESET_ALL}\n")
 
     text_to_summarize = ""
     culling_mode = settings.get('culling_mode', 'c')
     
-    # Determine the current max words for culling based on file type
     max_culling_words = settings['generic_chunk_length']
     if is_pdf:
         try:
@@ -638,7 +676,7 @@ found in file.'}
                 else:
                     max_culling_words = settings['short_pdf_chunk_length']
         except Exception:
-            pass # Fallback to generic chunk length
+            pass
     elif is_text:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -648,11 +686,21 @@ found in file.'}
                 else:
                     max_culling_words = settings['short_text_chunk_length']
         except Exception:
-            pass # Fallback to generic chunk length
+            pass
+            
+    has_keywords = False
+    filter_keywords = [k.strip().lower() for k in settings.get('filter_keywords', '').split(',') if k.strip()]
+    if filter_keywords:
+        for keyword in filter_keywords:
+            if re.search(r'\b' + re.escape(keyword) + r'\b', text, re.IGNORECASE):
+                has_keywords = True
+                break
+
+    print(f"{Fore.CYAN}Culling Mode: {culling_mode.upper()}. ", end="")
 
     if culling_mode == 'r':
         if settings.get('culling_regex'):
-            print(f"{Fore.CYAN}INFO: Using provided regex for culling.{Style.RESET_ALL}")
+            print(f"Using provided regex for culling.{Style.RESET_ALL}")
             try:
                 culling_regex = re.compile(settings['culling_regex'], re.DOTALL)
                 matches = culling_regex.findall(text)
@@ -661,73 +709,57 @@ found in file.'}
                 print(f"{Fore.RED}ERROR: Invalid regex string provided for culling: {e}. Falling back to default culling.{Style.RESET_ALL}")
                 text_to_summarize = cull_to_complete_sentences(text)
         else:
-            print(f"{Fore.LIGHTBLACK_EX}WARNING: No culling regex provided. Culling text to complete sentences.{Style.RESET_ALL}")
+            print(f"No culling regex provided. Culling text to complete sentences.{Style.RESET_ALL}")
             text_to_summarize = cull_to_complete_sentences(text)
-    elif culling_mode == 'k':
-        filter_keywords = [k.strip().lower() for k in settings['filter_keywords'].split(',') if k.strip()]
-        if filter_keywords:
-            filtered_text = filter_text_by_keywords(text, filter_keywords, settings['keyword_context_before'], settings['keyword_context_after'])
-            text_to_summarize = filtered_text if filtered_text.strip() else text
-        else:
-            text_to_summarize = cull_to_complete_sentences(text)
-            print(f"{Fore.LIGHTBLACK_EX}WARNING: No filter keywords provided. Culling text to complete sentences.{Style.RESET_ALL}")
-    elif culling_mode == 's':
-        filter_keywords = [k.strip().lower() for k in settings['filter_keywords'].split(',') if k.strip()]
+    elif culling_mode in ['s', 'b', '2', 'p']:
         if not filter_keywords:
+            print(f"No keywords provided. Using default sentence culling.{Style.RESET_ALL}")
             text_to_summarize = cull_to_complete_sentences(text)
-            print(f"{Fore.LIGHTBLACK_EX}INFO: No keywords provided. Using default sentence culling.{Style.RESET_ALL}")
         else:
-            sentence_pattern = r'[^.!?]*\b(' + '|'.join(re.escape(k) for k in filter_keywords) + r')\b[^.!?]*[.!?]'
-            matches = re.findall(sentence_pattern, text, re.IGNORECASE | re.DOTALL)
-            text_to_summarize = " ".join(matches)
-            if not text_to_summarize.strip():
-                text_to_summarize = cull_to_complete_sentences(text)
-    elif culling_mode == 'b':
-        filter_keywords = [k.strip().lower() for k in settings['filter_keywords'].split(',') if k.strip()]
-        if not filter_keywords:
-            text_to_summarize = cull_to_complete_sentences(text)
-            print(f"{Fore.LIGHTBLACK_EX}INFO: No keywords provided. Using default sentence culling.{Style.RESET_ALL}")
-        else:
-            pattern = r'((?:[^.!?]*[.!?]\s+){0,1}[^.!?]*\b(' + '|'.join(re.escape(k) for k in filter_keywords) + r')\b[^.!?]*[.!?])'
-            matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
-            text_to_summarize = " ".join([m[0] for m in matches])
-            if not text_to_summarize.strip():
-                text_to_summarize = cull_to_complete_sentences(text)
-    elif culling_mode == '2':
-        filter_keywords = [k.strip().lower() for k in settings['filter_keywords'].split(',') if k.strip()]
-        if not filter_keywords:
-            text_to_summarize = cull_to_complete_sentences(text)
-            print(f"{Fore.LIGHTBLACK_EX}INFO: No keywords provided. Using default sentence culling.{Style.RESET_ALL}")
-        else:
-            pattern = r'((?:[^.!?]*[.!?]\s+){0,2}[^.!?]*\b(' + '|'.join(re.escape(k) for k in filter_keywords) + r')\b[^.!?]*[.!?](?:\s+[^.!?]*[.!?])
+            if has_keywords:
+                print(f"{Fore.GREEN}Keyword(s) found. Culling successful.{Style.RESET_ALL}")
+                if culling_mode == 's':
+                    sentence_pattern = r'[^.!?]*\b(' + '|'.join(re.escape(k) for k in filter_keywords) + r')\b[^.!?]*[.!?]'
+                    matches = re.findall(sentence_pattern, text, re.IGNORECASE | re.DOTALL)
+                    text_to_summarize = " ".join(matches)
+                elif culling_mode == 'b':
+                    pattern = r'((?:[^.!?]*[.!?]\s+){0,1}[^.!?]*\b(' + '|'.join(re.escape(k) for k in filter_keywords) + r')\b[^.!?]*[.!?])'
+                    matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+                    text_to_summarize = " ".join([m[0] for m in matches])
+                elif culling_mode == '2':
+                    pattern = r'((?:[^.!?]*[.!?]\s+){0,2}[^.!?]*\b(' + '|'.join(re.escape(k) for k in filter_keywords) + r')\b[^.!?]*[.!?](?:\s+[^.!?]*
 
-{0,2})'
-            matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
-            text_to_summarize = " ".join([m[0] for m in matches])
-            if not text_to_summarize.strip():
-                text_to_summarize = cull_to_complete_sentences(text)
-    elif culling_mode == 'p':
-        filter_keywords = [k.strip().lower() for k in settings['filter_keywords'].split(',') if k.strip()]
-        if not filter_keywords:
-            text_to_summarize = cull_to_complete_sentences(text)
-            print(f"{Fore.LIGHTBLACK_EX}INFO: No keywords provided. Using default sentence culling.{Style.RESET_ALL}")
-        else:
-            pattern = r'((?:[^\n]+\n){0,1}[^.!?]*\b(' + '|'.join(re.escape(k) for k in filter_keywords) + r')\b[^.!?]*(?:\s+[^\n]+\n){0,1})'
-            matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
-            text_to_summarize = " ".join([m[0] for m in matches])
-            if not text_to_summarize.strip():
-                text_to_summarize = cull_to_complete_sentences(text)
+[.!?]){0,2})'
+                    matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+                    text_to_summarize = " ".join([m[0] for m in matches])
+                elif culling_mode == 'p':
+                    pattern = r'((?:[^\n]+\n){0,1}[^.!?]*\b(' + '|'.join(re.escape(k) for k in filter_keywords) + r')\b[^.!?]*(?:\s+[^\n]+\n){0,1})'
+                    matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+                    text_to_summarize = " ".join([m[0] for m in matches])
+                
+                if not text_to_summarize.strip():
+                     print(f"{Fore.YELLOW}WARNING: Culling produced no text. Falling back to summarizing entire extracted text.{Style.RESET_ALL}")
+                     text_to_summarize = text
+            else:
+                print(f"{Fore.YELLOW}WARNING: No keywords found. Falling back to using defined chunks.{Style.RESET_ALL}")
+                words = text.split()
+                text_chunks = [" ".join(words[i:i + max_chunk_length]) for i in range(0, len(words), max_chunk_length)]
+                
+                chunks_to_use = []
+                for chunk_num in chunks_list:
+                    if 0 < chunk_num <= len(text_chunks):
+                        chunks_to_use.append(text_chunks[chunk_num-1])
+                text_to_summarize = " ".join(chunks_to_use)
+                
     else: # culling_mode == 'n' or invalid choice
+        print(f"No culling selected. Summarizing entire extracted text.{Style.RESET_ALL}")
         text_to_summarize = text
-        print(f"{Fore.LIGHTBLACK_EX}INFO: No culling selected. Summarizing entire extracted text.{Style.RESET_ALL}")
 
-    # Trim culled text to max_culling_words
     if text_to_summarize.strip():
         words_culled = text_to_summarize.split()
         if len(words_culled) > max_culling_words:
-            # Find the position of the keyword to center the trim
             first_keyword_index = -1
-            filter_keywords = [k.strip().lower() for k in settings['filter_keywords'].split(',') if k.strip()]
+            filter_keywords = [k.strip().lower() for k in settings.get('filter_keywords', '').split(',') if k.strip()]
             for word_index, word in enumerate(words_culled):
                 if any(kw in word.lower() for kw in filter_keywords):
                     first_keyword_index = word_index
@@ -743,7 +775,6 @@ found in file.'}
             text_to_summarize = " ".join(trimmed_words) + "..."
             
     if settings['show_chunk_verbiage'].lower() == 'y':
-        # New logic to format raw text verbiage
         raw_lines = text.split('\n')
         processed_lines = []
         temp_line = ""
@@ -768,19 +799,35 @@ found in file.'}
         display_text = '\n'.join(processed_lines[:MAX_OUTPUT_LINES])
         
         print(f"\n{Fore.MAGENTA}--- Raw Text Verbiage ({len(text.split())} words) ---{Style.RESET_ALL}")
-        print(f"{Fore.MAGENTA}{display_text}{Style.RESET_ALL}")
+        lines_to_display = display_text.split('\n')
+        
+        for line_idx, line in enumerate(lines_to_display):
+            if line_idx >= MAX_VERBIAGE_LINES:
+                print(f"{Fore.MAGENTA}...{Style.RESET_ALL}")
+                break
+            
+            wrapped_line = '\n'.join([line[j:j+MAX_LINE_WIDTH] for j in range(0, len(line), MAX_LINE_WIDTH)])
+            
+            if len(wrapped_line) > MAX_VERBIAGE_CHARS:
+                wrapped_line = wrapped_line[:MAX_VERBIAGE_CHARS] + "..."
+            
+            filter_keywords = [k.strip().lower() for k in settings.get('filter_keywords', '').split(',') if k.strip()]
+            for keyword in filter_keywords:
+                wrapped_line = re.sub(r'(?i)\b' + re.escape(keyword) + r'\b', f"{Fore.YELLOW}{Style.BRIGHT}\\g<0>{Fore.MAGENTA}{Style.NORMAL}", 
+
+wrapped_line)
+            print(f"{Fore.MAGENTA}{wrapped_line}{Style.RESET_ALL}")
+            
         print(f"{Fore.MAGENTA}------------------------------{Style.RESET_ALL}\n")
 
     if not text_to_summarize.strip():
         print(f"{Fore.LIGHTBLACK_EX}WARNING: No text for summarization, skipping.{Style.RESET_ALL}")
         return None
     
-    # MODIFICATION: Add filename to the verbiage print
     print(f"{Fore.CYAN}Step 7.1: Filtered text ready. Starting summarization for {Fore.LIGHTRED_EX}{os.path.basename(file_path)}{Style.RESET_ALL}
 
 {Fore.CYAN}...{Style.RESET_ALL}")
     
-    # New logic to format chunk verbiage display
     if settings['show_chunk_verbiage'].lower() == 'y':
         raw_lines = text_to_summarize.split('\n')
         processed_lines = []
@@ -806,19 +853,37 @@ found in file.'}
         display_text = '\n'.join(processed_lines[:MAX_OUTPUT_LINES])
         
         print(f"\n{Fore.MAGENTA}--- Chunk 1 Verbiage ({len(text_to_summarize.split())} words) ---{Style.RESET_ALL}")
-        print(f"{Fore.MAGENTA}{display_text}{Style.RESET_ALL}")
+        lines_to_display = display_text.split('\n')
+        
+        for line_idx, line in enumerate(lines_to_display):
+            if line_idx >= MAX_VERBIAGE_LINES:
+                print(f"{Fore.MAGENTA}...{Style.RESET_ALL}")
+                break
+            
+            wrapped_line = '\n'.join([line[j:j+MAX_LINE_WIDTH] for j in range(0, len(line), MAX_LINE_WIDTH)])
+            
+            if len(wrapped_line) > MAX_VERBIAGE_CHARS:
+                wrapped_line = wrapped_line[:MAX_VERBIAGE_CHARS] + "..."
+            
+            filter_keywords = [k.strip().lower() for k in settings.get('filter_keywords', '').split(',') if k.strip()]
+            for keyword in filter_keywords:
+                wrapped_line = re.sub(r'(?i)\b' + re.escape(keyword) + r'\b', f"{Fore.YELLOW}{Style.BRIGHT}\\g<0>{Fore.MAGENTA}{Style.NORMAL}", 
+
+wrapped_line)
+            print(f"{Fore.MAGENTA}{wrapped_line}{Style.RESET_ALL}")
+        
         print(f"{Fore.MAGENTA}------------------------------{Style.RESET_ALL}\n")
     
-    # MODIFICATION: Add filename to the verbiage print
     print(f"{Fore.CYAN}Step 7.1.1: Summarizing chunk 1 for {Fore.LIGHTRED_EX}{os.path.basename(file_path)}{Style.RESET_ALL}{Fore.CYAN}...
 
 {Style.RESET_ALL}")
-    # MODIFICATION: Enforce 5-line limit on the output here
+    
     for line_idx, line in enumerate(text_to_summarize.split('\n')):
         if line_idx >= MAX_OUTPUT_LINES:
             print(f"{Fore.CYAN}...{Style.RESET_ALL}")
             break
-        print(f"{Fore.CYAN}{line.strip()}{Style.RESET_ALL}")
+        wrapped_line = '\n'.join([line[j:j+MAX_LINE_WIDTH] for j in range(0, len(line), MAX_LINE_WIDTH)])
+        print(f"{Fore.CYAN}{wrapped_line}{Style.RESET_ALL}")
 
     max_summary_length_final = settings['max_summary_length']
     min_summary_length_final = settings['min_summary_length']
@@ -846,10 +911,12 @@ None
     summary_text_for_file = ""
     for i, point in enumerate(bullet_points):
         if i >= MAX_OUTPUT_LINES:
+            print(f"{Fore.LIGHTGREEN_EX}...{Style.RESET_ALL}")
             break
         p_strip = point.strip()
         if p_strip:
-            print(f"{Fore.LIGHTGREEN_EX}- {p_strip}{Style.RESET_ALL}")
+            wrapped_line = '\n'.join([p_strip[j:j+MAX_LINE_WIDTH] for j in range(0, len(p_strip), MAX_LINE_WIDTH)])
+            print(f"{Fore.LIGHTGREEN_EX}- {wrapped_line}{Style.RESET_ALL}")
             summary_text_for_file += f"- {p_strip}\n"
 
     cleaned_file_name = os.path.splitext(os.path.basename(file_path))[0].replace('_', ' ').replace('-', ' ')
@@ -863,7 +930,6 @@ None
         primary_category = original_primary_category
         all_valid_categories.append(primary_category)
         
-        # Limit to one secondary category
         if len(results['labels']) > 1 and results['scores'][1] * 100 >= settings['secondary_confidence_threshold']:
             secondary_categories.append((results['labels'][1], results['scores'][1]))
             all_valid_categories.append(results['labels'][1])
@@ -894,7 +960,9 @@ None
     print(f"\n{Fore.CYAN}--- Colorized Summary ---{Style.RESET_ALL}")
     if primary_category == "Other":
         display_summary = '\n'.join(summary_text_for_file.split('\n')[:MAX_OUTPUT_LINES])
-        print(f"{Fore.MAGENTA}{display_summary}{Style.RESET_ALL}")
+        for line in display_summary.split('\n'):
+            wrapped_line = '\n'.join([line[j:j+MAX_LINE_WIDTH] for j in range(0, len(line), MAX_LINE_WIDTH)])
+            print(f"{Fore.MAGENTA}{wrapped_line}{Style.RESET_ALL}")
         return {'file_path': os.path.abspath(file_path), 'primary_category': primary_category, 'all_categories': all_valid_categories, 'summary': 
 
 summary_text_for_file}
@@ -903,8 +971,9 @@ summary_text_for_file}
     colors = [Fore.CYAN, Fore.LIGHTGREEN_EX]
     
     display_lines = []
-    for point in bullet_points:
-        if len(display_lines) >= MAX_OUTPUT_LINES:
+    for i, point in enumerate(bullet_points):
+        if i >= MAX_OUTPUT_LINES:
+            print(f"{Fore.LIGHTCYAN_EX}...{Style.RESET_ALL}")
             break
         p_strip = point.strip()
         if not p_strip: continue
@@ -917,9 +986,14 @@ summary_text_for_file}
                 color = colors[idx % 2]
                 colorized_point += f"{color}{word}{Style.RESET_ALL}"
             else: colorized_point += word
-        display_lines.append(f"{Fore.LIGHTCYAN_EX}- {colorized_point}{Style.RESET_ALL}")
+        
+        wrapped_colorized_point = '\n'.join([colorized_point[j:j+MAX_LINE_WIDTH] for j in range(0, len(colorized_point), MAX_LINE_WIDTH)])
+        display_lines.append(f"{Fore.LIGHTCYAN_EX}- {wrapped_colorized_point}{Style.RESET_ALL}")
     
-    print('\n'.join(display_lines))
+    for line in display_lines:
+        if len(line) > MAX_VERBIAGE_CHARS:
+            line = line[:MAX_VERBIAGE_CHARS] + "..."
+        print(line)
         
     summary_info = {'file_path': os.path.abspath(file_path), 'primary_category': primary_category, 'all_categories': all_valid_categories, 'summary': 
 
@@ -1219,7 +1293,6 @@ focused and relevant input for the summarizer.{Style.RESET_ALL}")
         print(f"{Fore.GREEN}Show extraction and summary text for each chunk? (y/n) [default: {current_show_verbiage}]: {Style.RESET_ALL}", end="")
         settings_to_save['show_chunk_verbiage'] = input().strip().lower() or current_show_verbiage
         
-        # New culling mode prompt
         print(f"\n{Fore.CYAN}# Culling Mode: Choose your method for pre-processing text for summarization. Fall back will be to defined chunk size.
 
 {Style.RESET_ALL}")
@@ -1234,9 +1307,10 @@ focused and relevant input for the summarizer.{Style.RESET_ALL}")
         culling_mode_options = ['c', 's', 'b', '2', 'p', 'r', 'n']
         print(f"{Fore.GREEN}Select a culling mode (c/s/b/2/p/r/n) [default: {settings_to_save.get('culling_mode', 'c')}]: {Style.RESET_ALL}", end="")
         culling_mode_choice = input().strip().lower()
-        settings_to_save['culling_mode'] = culling_mode_choice or settings_to_save.get('culling_mode', 'c')
-        if settings_to_save['culling_mode'] not in culling_mode_options:
-            settings_to_save['culling_mode'] = 'c'
+        if culling_mode_choice and culling_mode_choice in culling_mode_options:
+            settings_to_save['culling_mode'] = culling_mode_choice
+        else:
+            settings_to_save['culling_mode'] = settings_to_save.get('culling_mode', 'c')
         
         if settings_to_save['culling_mode'] in ['s', 'b', '2', 'p', 'k']:
             print(f"\n{Fore.CYAN}# These keywords are used to locate the relevant sentences/paragraphs for culling.{Style.RESET_ALL}")
@@ -1324,7 +1398,6 @@ pattern will be skipped entirely.{Style.RESET_ALL}")
                 dest_folder = os.path.join(output_folder_path, sanitized_cat)
                 if os.path.isdir(dest_folder):
                     for fname in os.listdir(dest_folder):
-                        # MODIFICATION: Add only the filename to the cache
                         existing_files_cache.add(fname)
             
             # Add special categories
@@ -1333,7 +1406,6 @@ pattern will be skipped entirely.{Style.RESET_ALL}")
                 dest_folder = os.path.join(output_folder_path, sanitized_cat)
                 if os.path.isdir(dest_folder):
                     for fname in os.listdir(dest_folder):
-                        # MODIFICATION: Add only the filename to the cache
                         existing_files_cache.add(fname)
             print(f"{Fore.CYAN}Cache built with {len(existing_files_cache)} entries.{Style.RESET_ALL}")
 
@@ -1365,7 +1437,8 @@ file_management_settings, settings_to_save)
                         expected_output_name = new_file_name_no_ext + ".url" if sys.platform == "win32" else new_file_name_no_ext
                     else:
                         expected_output_name = new_file_name_no_ext + os.path.splitext(file_path)[1]
-                    
+
+                    # FIX: Correctly check against the existing cache
                     if expected_output_name in existing_files_cache:
                         print(f"{Fore.LIGHTBLACK_EX}Skipping pre-filtered: '{os.path.basename(file_path)}' found in '{sanitize_for_path(category)}' 
 
@@ -1393,7 +1466,6 @@ subfolder.{Style.RESET_ALL}")
             
             files_to_process = filtered_files
             
-            # The new, modified line
             print(f"{Fore.CYAN}Pre-filtering complete: {len(files_to_process)} new files to process out of a total of {total_initial_files} from the 
 
 initial list.{Style.RESET_ALL}")
