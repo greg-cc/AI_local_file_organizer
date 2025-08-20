@@ -1,4 +1,3 @@
-
 # comboaisort41.py
 import os
 import sys
@@ -30,8 +29,8 @@ DARK_BROWN = '\033[38;2;101;67;33m'
 
 # Set global output line limit
 MAX_OUTPUT_LINES = 5
-MAX_LINE_WIDTH = 120
-MAX_VERBIAGE_CHARS = 220
+MAX_LINE_WIDTH = 150
+MAX_VERBIAGE_CHARS = 420
 MAX_VERBIAGE_LINES = 5
 
 # --- Global Variables for Models ---
