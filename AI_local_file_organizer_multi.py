@@ -1,4 +1,4 @@
-# AI_local_file_organizer_multi.py.py
+# comboaisort_final_full_menu_restored_v18.py
 import os
 import sys
 import psutil # For system memory check
@@ -39,9 +39,8 @@ def sanitize_for_path(name):
     sanitized = re.sub(r'[<>:"/\\|?*]', '', name)
     return sanitized[:50].strip()
 
-# --- MODIFIED FUNCTION ---
 def create_shortcut(source_path, shortcut_path_no_ext, print_lock):
-    """Creates a shortcut, now with verbose output if it already exists."""
+    """Creates a shortcut, now returns True on success and False on skip/fail."""
     try:
         if sys.platform == "win32":
             import win32com.client
@@ -49,20 +48,23 @@ def create_shortcut(source_path, shortcut_path_no_ext, print_lock):
             if os.path.exists(shortcut_path):
                 with print_lock:
                     tqdm.write(f"{Fore.YELLOW}Action:{Style.RESET_ALL} Shortcut for '{os.path.basename(source_path)}' already exists. Skipping.")
-                return # Exit verbosely
+                return False
             shell = win32com.client.Dispatch("WScript.Shell")
             shortcut = shell.CreateShortCut(shortcut_path)
             shortcut.TargetPath = os.path.abspath(source_path)
             shortcut.save()
+            return True
         else: # for macOS/Linux
             if os.path.lexists(shortcut_path_no_ext):
                 with print_lock:
                     tqdm.write(f"{Fore.YELLOW}Action:{Style.RESET_ALL} Symlink for '{os.path.basename(source_path)}' already exists. Skipping.")
-                return
+                return False
             os.symlink(os.path.abspath(source_path), shortcut_path_no_ext)
+            return True
     except Exception as e:
         with print_lock:
             tqdm.write(f"{Fore.RED}Failed to create shortcut for '{os.path.basename(source_path)}': {e}{Style.RESET_ALL}")
+        return False
 
 
 def tag_file_properties(file_path, primary_category, secondary_categories, print_lock):
@@ -264,6 +266,8 @@ def preprocessor_thread(source_files, job_dirs, num_workers, settings_data, prin
             tqdm.write(f"{Fore.BLUE}Preprocessor:{Style.RESET_ALL} Created job for '{os.path.basename(source_path)}' ({output_size} bytes)")
 
 def summarizer_process(job_dirs, settings_data, print_lock, stop_event):
+    torch.set_num_threads(1)
+    
     device = "cuda" if torch.cuda.is_available() else "cpu"
     summarizer_pipeline = pipeline("summarization", model="t5-small", device=device)
     pid = os.getpid()
@@ -356,7 +360,6 @@ def classifier_thread(total_jobs, job_dirs, categories, settings_data, print_loc
                         sec_cat_names = [cat for cat, score in secondary_categories]
                         tag_file_properties(result_data['source_path'], primary_category, sec_cat_names, print_lock)
 
-                # --- MODIFIED: FILE ACTION LOGIC ---
                 file_action = settings_data.get('file_action_choice', 'none')
                 if file_action != 'none':
                     source_path = result_data['source_path']
@@ -372,10 +375,10 @@ def classifier_thread(total_jobs, job_dirs, categories, settings_data, print_loc
                         try:
                             if file_action == 'shortcut':
                                 shortcut_path_no_ext = os.path.join(dest_dir, os.path.splitext(base_name)[0])
-                                # Pass the print_lock to the function
-                                create_shortcut(source_path, shortcut_path_no_ext, print_lock)
-                                with print_lock:
-                                    tqdm.write(f"{Fore.CYAN}Action:{Style.RESET_ALL} Created shortcut for '{base_name}' in '{primary_category}'")
+                                shortcut_created = create_shortcut(source_path, shortcut_path_no_ext, print_lock)
+                                if shortcut_created:
+                                    with print_lock:
+                                        tqdm.write(f"{Fore.CYAN}Action:{Style.RESET_ALL} Created shortcut for '{base_name}' in '{primary_category}'")
                             elif file_action == 'copy':
                                 if not os.path.exists(dest_path):
                                     shutil.copy2(source_path, dest_path)
