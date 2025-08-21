@@ -2,6 +2,8 @@ Create your own categories and have the files in your subdirectory ai scanned an
 
 Works on windows 8.1 machines as well, but with no GPU. Now with multiprocessor support for the classifier.
 
+Now with a prefilter to regex files you want to omit or include, and regex text extraction. 
+
 Instructions: download py file and run using below.
 cmd> python AI_local_file_organizer.py
 
