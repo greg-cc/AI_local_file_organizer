@@ -1,0 +1,46 @@
+{
+    "Financial_Legal": {
+        "description": "Invoices, bills, receipts, payment statements, commercial ledgers, financial records, asset pricing, and economic cost estimations.",
+        "threshold": 0.15000000000000002
+    },
+    "Legal_Contracts": {
+        "description": "Formal legal agreements, terms of service, binding paperwork, legal correspondence, case depositions, and statutory compliance documents.",
+        "threshold": 0.15000000000000002
+    },
+    "Technical_Docs": {
+        "description": "Technical specifications, engineering guides, system architecture manuals, API references, code repositories, and technical debugging logs.",
+        "threshold": 0.15000000000000002
+    },
+    "Clinical_Health": {
+        "description": "Health, wellness, medical research, clinical diagnosis, surgical procedures, operative reports, surgical excision, neurovascular bundles, tendons, ligaments, epiphysis, chemotherapy, postoperative care, clinical trials, dietary supplements, whole-food multivitamins, herbal extracts, traditional Chinese medicine formulations, raw pet food nutrition, green tripe, biological body systems, patient health records, medical diagnostics, neurology, neurovascular pathology, blood-brain barrier mechanics, genetic mutations, and neurological inflammation.",
+        "threshold": 0.10000000000000002
+    },
+    "Geopolitics_Politics": {
+        "description": "Political analysis, geopolitical strategies, institutional press releases, government policies, international relations, and diplomatic documentation.",
+        "threshold": 0.15000000000000002
+    },
+    "History_Archives": {
+        "description": "Historical chronicles, archival source texts, primary source evidence, chronological timelines, and structural historical analysis.",
+        "threshold": 0.15000000000000002
+    },
+    "Earth_Sciences": {
+        "description": "Weather forecasts, meteorological conditions, remote sensing, hyperspectral imaging (AVIRIS/ASTER), GIS mapping, and environmental sensor data.",
+        "threshold": 0.15000000000000002
+    },
+    "Trades_RealEstate": {
+        "description": "Property maintenance, building repair, hardware specifications, real estate property listings, housing markets, and structural property assessments.",
+        "threshold": 0.15000000000000002
+    },
+    "Audio_Transcripts": {
+        "description": "Spoken dialogue records, speech-to-text outputs, meeting dictations, and raw audio transcription blocks.",
+        "threshold": 0.15000000000000002
+    },
+    "Religion_Philosophy": {
+        "description": "Religious texts, theological doctrines, spiritual belief systems, historical religious philosophy, and comparative faith studies.",
+        "threshold": 0.15000000000000002
+    },
+    "Anthropology_Paleo": {
+        "description": "Human evolution, out-of-Africa migration models, hominoid/hominin fossil records, and archaeological site documentation.",
+        "threshold": 0.15000000000000002
+    }
+}
